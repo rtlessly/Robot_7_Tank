@@ -13,12 +13,6 @@ EulerAngles eulerAngles;
 float GyroMeasError = PI * (40.0f / 180.0f);   // gyroscope measurement error in rads/s (start at 40 deg/s)
 float GyroMeasDrift = PI * (0.0f  / 180.0f);   // gyroscope measurement drift in rad/s/s (start at 0.0 deg/s/s)
 
-// Correction for difference between magnetic north and true north (degrees)
-// Different for every location on earth (see ngdc.noaa.gov). 
-#define IMU_MAG_CORRECTION  3.25   // Declination at Dallas, TX is 3.25 degrees on 2017-05-01 
-//#define IMU_MAG_CORRECTION 13.8  // Declination at Danville, CA is 13.8 degrees (13 degrees 48 minutes and 47 seconds) on 2014-04-04
-
-
 float invSqrt(float x)
 {
    uint32_t i = 0x5F1F1412 - (*(uint32_t*)&x >> 1);
@@ -121,7 +115,8 @@ void MadgwickQuaternionUpdate(float ax, float ay, float az, float gx, float gy, 
     s3 = -_2q1 * (2.0f * q2q4 - _2q1q3 - ax) + _2q4 * (2.0f * q1q2 + _2q3q4 - ay) - 4.0f * q3 * (1.0f - 2.0f * q2q2 - 2.0f * q3q3 - az) + (-_4bx * q3 - _2bz * q1) * (_2bx * (0.5f - q3q3 - q4q4) + _2bz * (q2q4 - q1q3) - mx) + (_2bx * q2 + _2bz * q4) * (_2bx * (q2q3 - q1q4) + _2bz * (q1q2 + q3q4) - my) + (_2bx * q1 - _4bz * q3) * (_2bx * (q1q3 + q2q4) + _2bz * (0.5f - q2q2 - q3q3) - mz);
     s4 = _2q2 * (2.0f * q2q4 - _2q1q3 - ax) + _2q3 * (2.0f * q1q2 + _2q3q4 - ay) + (-_4bx * q4 + _2bz * q2) * (_2bx * (0.5f - q3q3 - q4q4) + _2bz * (q2q4 - q1q3) - mx) + (-_2bx * q1 + _2bz * q3) * (_2bx * (q2q3 - q1q4) + _2bz * (q1q2 + q3q4) - my) + _2bx * q2 * (_2bx * (q1q3 + q2q4) + _2bz * (0.5f - q2q2 - q3q3) - mz);
     
-    norm = sqrtf(s1 * s1 + s2 * s2 + s3 * s3 + s4 * s4);    // normalise step magnitude
+    // normalise step magnitude
+    norm = sqrtf(s1 * s1 + s2 * s2 + s3 * s3 + s4 * s4);
     norm = 1.0f/norm;
     
     s1 *= norm;
@@ -303,14 +298,14 @@ void UpdateEulerAngles()
   t2 = t2 < -1.0 ? -1.0 : t2;
   
   // Compute Euler angles in degrees
-  auto tempRoll  = atan2(t0, t1) * 180.0f / PI;
-  auto tempPitch = asin(t2) * 180.0f / PI;
-  auto tempYaw   = (atan2(t3, t4) * 180.0f / PI) - IMU_MAG_CORRECTION;
+  auto yaw = (atan2(t3, t4) * 180.0f / PI); // -IMU_MAG_CORRECTION;
+  auto pitch = asin(t2) * 180.0f / PI;
+  auto roll  = atan2(t0, t1) * 180.0f / PI;
   
   noInterrupts();
-  eulerAngles.Yaw   = tempYaw;
-  eulerAngles.Pitch = tempPitch;
-  eulerAngles.Roll  = tempRoll;
+  eulerAngles.Yaw   = yaw;
+  eulerAngles.Pitch = pitch;
+  eulerAngles.Roll  = roll;
   interrupts();
 }
 

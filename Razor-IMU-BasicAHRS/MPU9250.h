@@ -23,6 +23,12 @@
 #define MAG_SCALEY 1.05  // Default to 1.0 if unknown (DO NOT SET TO 0.0!!)
 #define MAG_SCALEZ 0.97  // Default to 1.0 if unknown (DO NOT SET TO 0.0!!)
 
+// Correction for difference between magnetic north and true north (degrees)
+// Different for every location on earth (see ngdc.noaa.gov). 
+#define IMU_MAG_CORRECTION  3.25   // Declination at Dallas, TX is 3.25 degrees on 2017-05-01 
+//#define IMU_MAG_CORRECTION 13.8  // Declination at Danville, CA is 13.8 degrees (13 degrees 48 minutes and 47 seconds) on 2014-04-04
+
+
 struct RawData
 {
     int16_t X;

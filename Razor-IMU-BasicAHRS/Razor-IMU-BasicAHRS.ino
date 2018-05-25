@@ -61,7 +61,7 @@ int HW_LED_PIN = 13;        // Set up pin 13 led for toggling
 // The all-important MPU-9250 IMU
 MPU9250 imu;
 
-// Slave I2C connection (A3=SDA, A4=SCL)
+// Slave I2C connection on SERCOM0 (A3=SDA, A4=SCL)
 TwoWire  slaveI2C = TwoWire(&sercom0, A3, A4);
 
 // IMU sensor data values
@@ -101,16 +101,20 @@ void setup()
     mode to communicate with the MPU-9250 and the AK8963, which means it cannot 
     be used for the Razor to communicate as a slave with an external board. This
     means we need another I2C port that can be configured as an I2C slave.
+
     Fortuanately, the design of the SAMD21 includes 6 Serial Communication ports
     (called SERCOMs) that can each be configured to be either a standard serial
-    (RX and TX), I2C, or SPI port.Unfortunately, due to the limited number of pins
+    (RX and TX), I2C, or SPI port. Unfortunately, due to the limited number of pins
     avaiable on the Razor board, the only pins available that can be used for a
     second I2C port are A3 and A4, which are mapped to the SERCOM0 serial port on
     the SAMD21. Therefore, the A3 and A4 pins must be reprogrammed to be used for
     SERCOM0 I2C SDA and SCL functionality.
+
     Note that using SERCOM0 in this way makes the hardware serial port on pins
     D0 and D1 (aka Serial on the Razor), unavailable since it also uses SERCOM0.
-    However, the Serial USB port (aka SerialUSB) will still work just fine.
+    However, the Serial USB port (aka SerialUSB) will still work just fine. Also,
+    just as we are reporgramming SERCOM0 as a second I2C port, we could reprogram
+    another SERCOM as an alternate serial port, if needed.
     --------------------------------------------------------------------------*/
     slaveI2C.begin(RAZOR_IMU_ADDRESS);
 
