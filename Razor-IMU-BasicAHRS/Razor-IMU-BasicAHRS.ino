@@ -1,29 +1,71 @@
-/* MPU9250 Basic Example Code
- by: Kris Winer
- date: April 1, 2014
- license: Beerware - Use this code however you'd like. If you
- find it useful you can buy me a beer some time.
+/*------------------------------------------------------------------------------
+Sparkfun Razor IMU M0 AHRS Firmware
 
- Demonstrate basic MPU-9250 functionality including parameterizing the register addresses, initializing the sensor,
- getting properly scaled accelerometer, gyroscope, and magnetometer data out. Added display functions to
- allow display to on breadboard monitor. Addition of 9 DoF sensor fusion using open source Madgwick and
- Mahony filter algorithms. Sketch runs on the 3.3 V 8 MHz Pro Mini and the Teensy 3.1.
+By:         R. T. Lessly
+Date:       2018-05-25
+License:    TBD
 
- SDA and SCL should have external pull-up resistors (to 3.3V).
- 10k resistors are on the EMSENSR-9250 breakout board.
+This is the source code for firmware to load on the SAMD21 microcontroller of the
+Sparkfun Razor IMU M0 for it to act as a 3-axis Attitude Heading Reference System
+(AHRS). This fimware configures the Razor to act as a slave device to another
+computer via either a Serial port or an I2C port. The firmware is designed to respond
+to a specific set of commands to return 3-axis scaled accelerometer, gyroscope,
+magnetometer, Euler angels (yaw, pitch, roll), and velocity information.
 
- Hardware setup:
- MPU9250 Breakout --------- Arduino
- VDD ---------------------- 3.3V
- VDDI --------------------- 3.3V
- SDA ----------------------- A4
- SCL ----------------------- A5
- GND ---------------------- GND
+All commands begin with "Q" and is followed by a letter indicating the requested
+data. The letters are (must be upper case):
+    - A : Return 3-axis acceleration vector in g's
+    - G : Return 3-axis gyroscope rate vector in degrees/sec
+    - M : Return 3-axis magnetometer vector in milliGuass
+    - V : Return 3-axis integrated velocity vector in meters/sec
+    - E : Return Euler angles as yaw, pitch, roll in degrees
+    - I : Returns the Firmware ID (0x50)
 
- Note: The MPU9250 is an I2C sensor and uses the Arduino Wire library.
- Because the sensor is not 5V tolerant, we are using a 3.3 V 8 MHz Pro Mini or a 3.3 V Teensy 3.1.
- We have disabled the internal pull-ups used by the Wire library in the Wire.h/twi.c utility file.
- We are also using the 400 kHz fast I2C mode by setting the TWI_FREQ  to 400000L /twi.h utility file.
+For example, to request Euler angles, send the command "QE" via either I2C or
+the serial port. NOTE: It is not necessary to null-terminate the command string
+but it won't hurt anything if you do.
+
+The coordinate axes of all vector responses align with the accelerometer and
+gyroscope axes of the MPU-9250 (as documented on Razor circuit board). The
+magnetometer axes are translated to align with the accelerometer and gyroscope so
+that all vectors use the same coordinate axes. Note that this coordinate system 
+is fixed to the Razor's reference frame.
+
+The Euler angles make use of the Earth's magnetic field and gravity to determine 
+an Earth-fixed frame of reference which can be used to compute an the absolute
+orientation of the Razor relative to the Earth. Yaw is the the angle between the
+Razor's x-axis and Earth's magnetic north, with 0/360 degrees pointing North, 90
+degrees pointing east, etc. Pitch is the angle between the Razor's x-axis and the
+tangential plane of the Earth surface directly below the vehicle (i.e., the horizon
+plane). Positive pitch is when the Razor's x-axis is pointed up. Roll is the angle
+between the Razor's z-axis and the gravity vector.
+
+If using the serial port, the command is transmitted to the Razor as a string 
+terminated with a CR/LF. The Razor sends the results back in ASCII format prefixed
+with the requested command code (A, G, M, V, E, ID), followed by a space and then
+the data with each number separated by a space. All numbers are formatted as
+floating point with 2 decimal digits. The entire response is terminated with a
+CR/LF. All vectors are sent back in X, Y, Z order, and the Euler angles are sent
+back in yaw, pitch, roll order.
+
+If using the I2C port, send the command string to address 0x40 followed by a data 
+read request to the same address. The results are sent back as 4-byte binary floating 
+point numbers in the native floating point byte-order of the SAMD21. All vectors
+are sent back in X, Y, Z order, and the Euler angles are send back in yaw, pitch, 
+roll order.
+
+The firmware makes use of the open source Madgwick and Mahony filter algorithms 
+to compute an absolute orientation quaternion that is then converted to Euler angles.
+
+Since the primary I2C port of the SAMD21 is dedicated to communicating with the
+on-board MPU-9250 IMU, and since SAMD21 I2C ports cannot be configured as both a
+master and slave at the same time, this firmware configures an alternate I2C port
+on the Razor's pin A3 (SDA) and A4 (SCL) using the SAMD21 SERCOM0 port to act as
+the slave I2C port (see explanation below).
+
+ Note: The Razor runs on the 3.3v and is not 5v tolerant. To connect it to a 5v
+ system such as an Arduino Uno, a bidirectional signal level converter should be
+ used to connect the I2C and/or the hardware serial port of the two devices.
  */
 #include <Arduino.h>
 #include <wiring_private.h> // pinPeripheral() function
@@ -286,6 +328,10 @@ static void RequestI2C()
                 slaveI2C.write((uint8_t*)&velocity, sizeof(velocity));
                 break;
 
+            case 'I':
+                slaveI2C.write(RAZOR_IMU__ID);
+                break;
+
             default:
                 slaveI2C.write(0);
                 break;
@@ -342,6 +388,10 @@ void RequestSerial(Stream& dataStream)
 
             case 'V':             // Send velocity vector
                 DataStream << "V " << _FLOAT(velocity.X, 2) << " " << _FLOAT(velocity.Y, 2) << " " << _FLOAT(velocity.Z, 2) << endl;
+                break;
+
+            case 'I':
+                DataStream << "I " << _HEX(RAZOR_IMU__ID) << endl;
                 break;
 
             default:

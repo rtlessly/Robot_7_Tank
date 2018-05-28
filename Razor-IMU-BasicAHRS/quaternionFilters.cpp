@@ -84,7 +84,6 @@ void MadgwickQuaternionUpdate(float ax, float ay, float az, float gx, float gy, 
     // Normalise accelerometer measurement
     norm = sqrtf(ax * ax + ay * ay + az * az); 
     norm = 1.0f/norm;
-
     ax *= norm;
     ay *= norm;
     az *= norm;
@@ -92,7 +91,6 @@ void MadgwickQuaternionUpdate(float ax, float ay, float az, float gx, float gy, 
     // Normalise magnetometer measurement
     norm = sqrtf(mx * mx + my * my + mz * mz);
     norm = 1.0f/norm;
-
     mx *= norm;
     my *= norm;
     mz *= norm;
@@ -118,7 +116,6 @@ void MadgwickQuaternionUpdate(float ax, float ay, float az, float gx, float gy, 
     // normalise step magnitude
     norm = sqrtf(s1 * s1 + s2 * s2 + s3 * s3 + s4 * s4);
     norm = 1.0f/norm;
-    
     s1 *= norm;
     s2 *= norm;
     s3 *= norm;
@@ -138,7 +135,6 @@ void MadgwickQuaternionUpdate(float ax, float ay, float az, float gx, float gy, 
     
     norm = sqrtf(q1 * q1 + q2 * q2 + q3 * q3 + q4 * q4);    // normalise quaternion
     norm = 1.0f/norm;
-    
     q[0] = q1 * norm;
     q[1] = q2 * norm;
     q[2] = q3 * norm;
@@ -190,7 +186,6 @@ void MahonyQuaternionUpdate(float ax, float ay, float az, float gx, float gy, fl
     // Normalise accelerometer measurement
     norm = sqrtf(ax * ax + ay * ay + az * az);
     norm = 1.0f / norm;        // use reciprocal for division
-
     ax *= norm;
     ay *= norm;
     az *= norm;
@@ -198,7 +193,6 @@ void MahonyQuaternionUpdate(float ax, float ay, float az, float gx, float gy, fl
     // Normalise magnetometer measurement
     norm = sqrtf(mx * mx + my * my + mz * mz);
     norm = 1.0f / norm;        // use reciprocal for division
-
     mx *= norm;
     my *= norm;
     mz *= norm;
