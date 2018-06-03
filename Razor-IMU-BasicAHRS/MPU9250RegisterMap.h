@@ -16,8 +16,6 @@
 #define MPU9250_ADDRESS 0x68   // Device address when ADO = 0
 #endif
 
-#define AK8963_ADDRESS 0x0C    //  Address of magnetometer
-
 // AK8963 Magnetometer Registers
 #define AK8963_ADDRESS   0x0C
 #define AK8963_WHO_AM_I  0x00  // should return 0x48
