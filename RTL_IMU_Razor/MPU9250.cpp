@@ -1,4 +1,4 @@
-/* *****************************************************************************
+﻿/* *****************************************************************************
 MPU-9250 IMU Sensor Basic Driver
 
 The MPU-9250 consists of an MPU-6500 3-axis gyroscope/accelerometer and an AK8963 
@@ -405,18 +405,18 @@ int8_t MPU9250::Update()
 
         // Turn the MSB and LSB into a signed 16-bit value
         noInterrupts();
-        accelRaw.X = ((int16_t)rawData[0] << 8) | rawData[1];
-        accelRaw.Y = ((int16_t)rawData[2] << 8) | rawData[3];
-        accelRaw.Z = ((int16_t)rawData[4] << 8) | rawData[5];
+        accelRaw.x = ((int16_t)rawData[0] << 8) | rawData[1];
+        accelRaw.y = ((int16_t)rawData[2] << 8) | rawData[3];
+        accelRaw.z = ((int16_t)rawData[4] << 8) | rawData[5];
         interrupts();
 
         readBytes(MPU9250_ADDRESS, GYRO_XOUT_H, 6, &rawData[0]);
 
         // Turn the MSB and LSB into a signed 16-bit value
         noInterrupts();
-        gyroRaw.X = ((int16_t)rawData[0] << 8) | rawData[1];
-        gyroRaw.Y = ((int16_t)rawData[2] << 8) | rawData[3];
-        gyroRaw.Z = ((int16_t)rawData[4] << 8) | rawData[5];
+        gyroRaw.x = ((int16_t)rawData[0] << 8) | rawData[1];
+        gyroRaw.y = ((int16_t)rawData[2] << 8) | rawData[3];
+        gyroRaw.z = ((int16_t)rawData[4] << 8) | rawData[5];
         interrupts();
 
         result |= 0x01;
@@ -434,9 +434,9 @@ int8_t MPU9250::Update()
         if (!(st2 & 0x08))
         {
             noInterrupts();
-            magRaw.X = ((int16_t)rawData[1] << 8) | rawData[0];  // Turn the MSB and LSB into a signed 16-bit value
-            magRaw.Y = ((int16_t)rawData[3] << 8) | rawData[2];  // Data stored as little Endian
-            magRaw.Z = ((int16_t)rawData[5] << 8) | rawData[4];
+            magRaw.x = ((int16_t)rawData[1] << 8) | rawData[0];  // Turn the MSB and LSB into a signed 16-bit value
+            magRaw.y = ((int16_t)rawData[3] << 8) | rawData[2];  // Data stored as little Endian
+            magRaw.z = ((int16_t)rawData[5] << 8) | rawData[4];
             interrupts();
             result |= 0x02;
         }
@@ -446,27 +446,29 @@ int8_t MPU9250::Update()
 }
 
 
-ScaledData MPU9250::GetAccel()
+Vector3F MPU9250::GetAccel()
 {
     auto aRes = GetAres();  // Acceleration scaling factor
-    return ScaledData(accelRaw.X * aRes, accelRaw.Y * aRes, accelRaw.Z * aRes); // - accelBias[2];
+    
+    return Vector3F(accelRaw.x * aRes, accelRaw.y * aRes, accelRaw.z * aRes); // - accelBias[2];
 }
 
 
-ScaledData MPU9250::GetDynamicAccel()
+Vector3F MPU9250::GetDynamicAccel()
 {
-    return  ScaledData(dax, day, daz);
+    return  Vector3F(dax, day, daz);
 }
 
 
-ScaledData MPU9250::GetGyro()
+Vector3F MPU9250::GetGyro()
 {
-    auto gRes = GetGres()*PI / 180.0f;  // Gyroscope scaling factor combined with and degress-to-radians conversion
-    return ScaledData(gyroRaw.X * gRes, gyroRaw.Y * gRes, gyroRaw.Z * gRes);
+    auto gRes = GetGres()*DEG_TO_RAD;  // Gyroscope scaling factor combined with degress-to-radians conversion
+
+    return Vector3F(gyroRaw.x * gRes, gyroRaw.y * gRes, gyroRaw.z * gRes);
 }
 
 
-ScaledData MPU9250::GetMag()
+Vector3F MPU9250::GetMag()
 {
     auto mRes = GetMres();  // Magnetometer scaling factor
 
@@ -476,9 +478,12 @@ ScaledData MPU9250::GetMag()
     // this orientation mismatch the magnetometer axes are realigned to match the
     // accelerometer and gyroscope axes by swapping the the magnetometer X and Y axes
     // and negating its z-axis.
-    return ScaledData((magRaw.Y - magBias[1]) * magSens[1] * mRes,      // x value = mag y-axis value
-                      (magRaw.X - magBias[0]) * magSens[0] * mRes,      // y value = mag x-axis value
-                     -(magRaw.Z - magBias[2]) * magSens[2] * mRes);     // z value = negated mag z-axis value
+    return Vector3F((magRaw.y - magBias[1]) * mRes * magSens[1],      // x value = mag y-axis value
+                      (magRaw.x - magBias[0]) * mRes * magSens[0],      // y value = mag x-axis value
+                     -(magRaw.z - magBias[2]) * mRes * magSens[2]);     // z value = negated mag z-axis value
+    //return ScaledData((magRaw.y - magBias[1]) * mRes,      // x value = mag y-axis value
+    //                  (magRaw.x - magBias[0]) * mRes,      // y value = mag x-axis value
+    //                 -(magRaw.z - magBias[2]) * mRes);     // z value = negated mag z-axis value
 }
 
 
@@ -615,6 +620,120 @@ void MPU9250::GetMagCalibration(float bias[3], float sensitivity[3])
         sensitivity[1] = magSens[1];
         sensitivity[2] = magSens[2];
     }
+}
+
+
+//******************************************************************************
+/// time smoothing constant for low-pass filter
+/// 0 ≤ alpha ≤ 1 ; a smaller value basically means more smoothing
+/// @see http://en.wikipedia.org/wiki/Low-pass_filter#Discrete-time_realization
+/// @see http://en.wikipedia.org/wiki/Low-pass_filter#Algorithmic_implementation
+//******************************************************************************
+float lowPass(float newValue, float oldValue, float alpha)
+{
+    auto output = oldValue + alpha * (newValue - oldValue);
+
+    return output;
+}
+
+
+//******************************************************************************
+/// time smoothing constant for low-pass filter
+/// 0 ≤ alpha ≤ 1 ; a smaller value basically means more smoothing
+/// @see http://en.wikipedia.org/wiki/Low-pass_filter#Discrete-time_realization
+/// @see http://en.wikipedia.org/wiki/Low-pass_filter#Algorithmic_implementation
+//******************************************************************************
+Vector3F lowPass(Vector3F& newValue, Vector3F& oldValue, float alpha)
+{
+    auto output = Vector3F(oldValue);
+    
+    output.x += alpha * (newValue.x - oldValue.x);
+    output.y += alpha * (newValue.y - oldValue.y);
+    output.z += alpha * (newValue.z - oldValue.z);
+
+    return output;
+}
+
+
+//******************************************************************************
+// Get tilt-compensated Compass heading
+// Only accurate when device is under little or no acceleration
+//******************************************************************************
+float MPU9250::GetCompassHeading()
+{   
+    // Variables to remember from last iteration
+    static Vector3F lastMag;   // The smoothed magnetometer reading from the previous iteration
+    static Vector3F lastAcc;   // The smoothed accelerometer reading from the previous iteration
+    static uint32_t lastSampleTime;
+
+    // Compute time interval since last measurement (dt) in seconds
+    auto now = micros();
+    auto dt = (now - lastSampleTime) / 1000000.0f;
+
+    // Remember the last measurement time for the next iteration
+    lastSampleTime = now;
+
+    // Compute the low-pass filter coefficient, alpha. The basic formula is:
+    // 
+    //          alpha = beta * 1/n
+    //
+    // Where: n = Sampling rate per second
+    //        beta = A constant that controls the overall behavior of the filter
+    //
+    // 1/n is the same as the sampling interval, dt, in seconds.
+    //
+    // Larger values of beta make the filter more responsive (i.e., the output
+    // changes faster) but reduces the filters effectiveness (i.e., the output
+    // has more noise in it), while smaller values do the opposite.
+    //
+    // If this method is called infrequently, dt could exceed 1 second, which may cause
+    // alpha to exceed 1. The same could also happen if beta is too large. However, 
+    // alpha should always be between 0 and 1. To ensure that, the min() function
+    // is used to ensure that alpha is never greater than 1 (when alpha=1 the 
+    // low-pass filter is effectively disabled and returns the input value unchanged).
+    auto beta = 2.0f;
+    auto alpha = min(1.0f, beta*dt);
+
+    // Get the magenetometer and accelerometer readings
+    auto mag = GetMag();
+    auto acc = GetAccel();
+
+    // Run the magnetometer and accelerometer values through a low-pass filter to smooth output
+    // (also remember the smoothed values for the next iteration)
+    auto bp = lastMag = lowPass(mag, lastMag, alpha);
+    auto gp = lastAcc = lowPass(acc, lastAcc, alpha);
+
+    // Calculate roll angle
+    auto roll = atan2(gp.y, gp.z);          // Eq 13
+    auto sr = sin(roll);
+    auto cr = cos(roll);
+
+    // de-rotate by roll angle
+    auto by = bp.y*cr - bp.z*sr;            // Eq 19: y component
+    
+    bp.z = bp.y*sr + bp.z*cr;               // Bpz = py*sin(roll)+Bpz*cos(roll)
+    gp.z = gp.y*sr + gp.z*cr;               // Eq 15 denominator
+
+    // calculate current pitch angle
+    auto pitch = atan(-gp.x/gp.z);          // Eq 15
+    auto sp = sin(pitch);
+    auto cp = cos(pitch);
+
+    // de-rotate by pitch angle 
+    auto bx =  bp.x*cp + bp.z*sp;           // Eq 19: x component 
+    //auto bz = -bp.x*sp + bp.z*cp;           // Eq 19: z component - not really needed
+
+    // calculate current yaw angle
+    auto yaw = atan2(-by, bx) + IMU_MAG_CORRECTION;          // Eq 22
+
+    // Converts yaw angle to heading angle in range 0-2PI; where 0=North, PI/2=East, PI=South, 3PI/2=West
+    return fmod((TWO_PI - yaw), TWO_PI);
+}
+
+
+float MPU9250::GetCompassHeadingDegrees()
+{
+    return GetCompassHeading() * RAD_TO_DEG;
 }
 
 

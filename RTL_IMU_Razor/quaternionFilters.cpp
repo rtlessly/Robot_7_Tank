@@ -17,7 +17,7 @@ float GyroMeasError = PI * (40.0f / 180.0f);   // gyroscope measurement error in
 float GyroMeasDrift = PI * (0.0f  / 180.0f);   // gyroscope measurement drift in rad/s/s (start at 0.0 deg/s/s)
 
 
-float invSqrt(float x)
+float old_invSqrt(float x)
 {
    uint32_t i = 0x5F1F1412 - (*(uint32_t*)&x >> 1);
    float tmp = *(float*)&i;
@@ -26,7 +26,7 @@ float invSqrt(float x)
 }
 
 
-float Q_rsqrt(float x)
+float invSqrt(float x)
 {
     const float threehalfs = 1.5F;
 
@@ -36,8 +36,8 @@ float Q_rsqrt(float x)
 
     i = 0x5f3759df - (i >> 1);                  // Use magic number to yield first approximation 
     y = *(float *)&i;                           // Convert approximation back to float
-    y = y * (threehalfs - (half_x * y * y));    // One iteration of newton's method to refine result
-    //y  = y * ( threehalfs - ( x2 * y * y ) );   // 2nd iteration, usually not needed
+    y = y * (1.5F - (half_x * y * y));          // One iteration of newton's method to refine result
+    //y  = y * ( 1.5F - ( x2 * y * y ) );         // 2nd iteration, usually not needed
 
     return y;
 }
@@ -282,75 +282,70 @@ void MahonyQuaternionUpdate(float ax, float ay, float az, float gx, float gy, fl
 
 
 
-ScaledData MahonyQuaternionUpdate(const ScaledData& a, const ScaledData& g, const ScaledData& m, const float deltaT)
+Vector3F MahonyQuaternionUpdate(const Vector3F& a, const Vector3F& g, const Vector3F& m, const float deltaT)
 {
-    if (a.X == 0.0f && a.Y == 0.0f && a.Z == 0.0f) return g; // handle NaN
+    if (a.x == 0.0f && a.y == 0.0f && a.z == 0.0f) return g; // handle NaN
 
-    if (m.X == 0.0f && m.Y == 0.0f && m.Z == 0.0f) return g; // handle NaN
+    if (m.x == 0.0f && m.y == 0.0f && m.z == 0.0f) return g; // handle NaN
 
     // Auxiliary variables to avoid repeated arithmetic
-    float q1 = q[0], q2 = q[1], q3 = q[2], q4 = q[3];   // short name local variable for readability
+    float q0 = q[0], q1 = q[1], q2 = q[2], q3 = q[3];   // short name local variable for readability
+    float q0q0 = q0 * q0;
+    float q0q1 = q0 * q1;
+    float q0q2 = q0 * q2;
+    float q0q3 = q0 * q3;
     float q1q1 = q1 * q1;
     float q1q2 = q1 * q2;
     float q1q3 = q1 * q3;
-    float q1q4 = q1 * q4;
     float q2q2 = q2 * q2;
     float q2q3 = q2 * q3;
-    float q2q4 = q2 * q4;
     float q3q3 = q3 * q3;
-    float q3q4 = q3 * q4;
-    float q4q4 = q4 * q4;
 
     float norm;
 
     // Normalise accelerometer measurement
-    norm = sqrtf(a.X * a.X + a.Y * a.Y + a.Z * a.Z);
-    norm = 1.0f / norm;        // use reciprocal for division
+    norm = invSqrt(a.x * a.x + a.y * a.y + a.z * a.z);
 
-    auto ax = a.X * norm;
-    auto ay = a.Y * norm;
-    auto az = a.Z * norm;
+    auto ax = a.x * norm;
+    auto ay = a.y * norm;
+    auto az = a.z * norm;
 
     // Normalise magnetometer measurement
-    norm = sqrtf(m.X * m.X + m.Y * m.Y + m.Z * m.Z);
-    norm = 1.0f / norm;        // use reciprocal for division
+    norm = invSqrt(m.x * m.x + m.y * m.y + m.z * m.z);
     
-    auto mx = m.X * norm;
-    auto my = m.Y * norm;
-    auto mz = m.Z * norm;
+    auto mx = m.x * norm;
+    auto my = m.y * norm;
+    auto mz = m.z * norm;
 
     // Reference direction of Earth's magnetic field
-    auto hx = 2.0f * mx * (0.5f - q3q3 - q4q4) + 2.0f * my * (q2q3 - q1q4) + 2.0f * mz * (q2q4 + q1q3);
-    auto hy = 2.0f * mx * (q2q3 + q1q4) + 2.0f * my * (0.5f - q2q2 - q4q4) + 2.0f * mz * (q3q4 - q1q2);
+    auto hx = 2.0f * (mx * (0.5f - q2q2 - q3q3) + my * (q1q2 - q0q3) + mz * (q1q3 + q0q2));
+    auto hy = 2.0f * (mx * (q1q2 + q0q3) + my * (0.5f - q1q1 - q3q3) + mz * (q2q3 - q0q1));
     auto bx = sqrtf((hx * hx) + (hy * hy));
-    auto bz = 2.0f * mx * (q2q4 - q1q3) + 2.0f * my * (q3q4 + q1q2) + 2.0f * mz * (0.5f - q2q2 - q3q3);
+    auto bz = 2.0f * (mx * (q1q3 - q0q2) + my * (q2q3 + q0q1) + mz * (0.5f - q1q1 - q2q2));
 
     // Estimated direction of gravity
-    auto vx = 2.0f * (q2q4 - q1q3);
-    auto vy = 2.0f * (q1q2 + q3q4);
-    auto vz = q1q1 - q2q2 - q3q3 + q4q4;
-
-    // Compute true dynamic acceleration
-    dax = ax - vx;
-    day = ay - vy;
-    daz = az - vz;
+    auto vx = 2.0f * (q1q3 - q0q2);
+    auto vy = 2.0f * (q0q1 + q2q3);
+    auto vz = 2.0f * (q0q0 - 0.5f + q3q3);
 
     // Estimated direction of magnetic field
-    auto wx = 2.0f * bx * (0.5f - q3q3 - q4q4) + 2.0f * bz * (q2q4 - q1q3);
-    auto wy = 2.0f * bx * (q2q3 - q1q4) + 2.0f * bz * (q1q2 + q3q4);
-    auto wz = 2.0f * bx * (q1q3 + q2q4) + 2.0f * bz * (0.5f - q2q2 - q3q3);
+    auto wx = 2.0f * (bx * (0.5f - q2q2 - q3q3) + bz * (q1q3 - q0q2));
+    auto wy = 2.0f * (bx * (q1q2 - q0q3) + bz * (q0q1 + q2q3));
+    auto wz = 2.0f * (bx * (q0q2 + q1q3) + bz * (0.5f - q1q1 - q2q2));
 
-    // Error is cross product between estimated direction and measured direction of gravity
-    // Likewise for the magnetic field
+    // Error is sum of cross product between estimated direction and measured direction of field vectors
     auto ex = (ay * vz - az * vy) + (my * wz - mz * wy);
     auto ey = (az * vx - ax * vz) + (mz * wx - mx * wz);
     auto ez = (ax * vy - ay * vx) + (mx * wy - my * wx);
 
     if (Ki > 0.0f)
     {
-        eInt[0] += ex;      // accumulate integral error
-        eInt[1] += ey;
-        eInt[2] += ez;
+        //eInt[0] += ex;      // accumulate integral error
+        //eInt[1] += ey;
+        //eInt[2] += ez;
+        eInt[0] += ex * deltaT;      // accumulate integral error
+        eInt[1] += ey * deltaT;
+        eInt[2] += ez * deltaT;
     }
     else
     {
@@ -360,29 +355,37 @@ ScaledData MahonyQuaternionUpdate(const ScaledData& a, const ScaledData& g, cons
     }
 
     // Apply feedback terms to gyro rates
-    auto gx = g.X + Kp * ex + Ki * eInt[0];
-    auto gy = g.Y + Kp * ey + Ki * eInt[1];
-    auto gz = g.Z + Kp * ez + Ki * eInt[2];
+    auto gx = g.x + Kp * ex + Ki * eInt[0];
+    auto gy = g.y + Kp * ey + Ki * eInt[1];
+    auto gz = g.z + Kp * ez + Ki * eInt[2];
 
     // Integrate rate of change of quaternion
-    auto pa = q2;
-    auto pb = q3;
-    auto pc = q4;
+    //auto pa = q1;
+    //auto pb = q2;
+    //auto pc = q3;
+    auto qa = q0;
+    auto qb = q1;
+    auto qc = q2;
 
-    q1 = q1 + (-q2 * gx - q3 * gy - q4 * gz) * (0.5f * deltaT);
-    q2 = pa + (q1 * gx + pb * gz - pc * gy) * (0.5f * deltaT);
-    q3 = pb + (q1 * gy - pa * gz + pc * gx) * (0.5f * deltaT);
-    q4 = pc + (q1 * gz + pa * gy - pb * gx) * (0.5f * deltaT);
+    q0 += (-qb * gx - qc * gy - q3 * gz) * (0.5f * deltaT);
+    q1 += ( qa * gx + qc * gz - q3 * gy) * (0.5f * deltaT);
+    q2 += ( qa * gy - qb * gz + q3 * gx) * (0.5f * deltaT);
+    q3 += ( qa * gz + qb * gy - qc * gx) * (0.5f * deltaT);
 
     // Normalise quaternion
-    norm = sqrtf(q1 * q1 + q2 * q2 + q3 * q3 + q4 * q4);
-    norm = 1.0f / norm;
-    q[0] = q1 * norm;
-    q[1] = q2 * norm;
-    q[2] = q3 * norm;
-    q[3] = q4 * norm;
+    norm = invSqrt(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3);
+    //norm = 1.0f / norm;
+    q[0] = q0 * norm;
+    q[1] = q1 * norm;
+    q[2] = q2 * norm;
+    q[3] = q3 * norm;
 
-    return ScaledData(gx, gy, gz);
+    // Compute true dynamic acceleration
+    dax = a.x - vx;
+    day = a.y - vy;
+    daz = a.z - vz;
+
+    return Vector3F(gx, gy, gz);
 }
 
 

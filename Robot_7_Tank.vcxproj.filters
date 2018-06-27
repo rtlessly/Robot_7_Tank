@@ -24,6 +24,9 @@
     <ClInclude Include="ultrasonic.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="RTL_IMU_Razor\RTL_IMU.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="ultrasonic.cpp">

@@ -26,7 +26,7 @@ import processing.serial.*;
 // 1. Have a look at the Processing console output of this sketch.
 // 2. Look for the serial port list and find the port you need (it's the same as in Arduino).
 // 3. Set your port number here:
-final static int SERIAL_PORT_NUM = 0;
+final static int SERIAL_PORT_NUM = 1;
 // 4. Try again.
 
 
@@ -113,14 +113,23 @@ void drawBoard()
 {
   pushMatrix();
 
-  rotateY(-radians(yaw - yawOffset));
-  rotateX(-radians(pitch));
+  rotateY(radians(yaw - yawOffset));
+  rotateX(radians(pitch));
   rotateZ(radians(roll)); 
 
   // Board body
   fill(255, 0, 0);
   box(250, 20, 400);
-  
+    
+  // Top
+  beginShape(QUADS);
+  fill(0,0,255);
+  vertex(-125, -11, 200);
+  vertex( 125, -11, 200);
+  vertex( 125, -11, -200);
+  vertex(-125, -11, -200);
+  endShape();
+
   // Forward-arrow
   pushMatrix();
   translate(0, 0, -200);
@@ -207,10 +216,10 @@ void draw()
       
       if (values.length >= 4)
       {
-        if (values[0].equals("E"))
+        if (values[0].equals("#E"))
         { 
-          yaw   = (-float(values[1]) + 360) % 360;
-          pitch = -float(values[2]);
+          yaw   = (360.0 + float(values[1])) % 360.0; //(-float(values[1]) + 360) % 360;
+          pitch = float(values[2]);
           roll  = float(values[3]);
         }
       }
@@ -222,7 +231,7 @@ void draw()
   }
   else 
   {
-    serial.write("QE\n");     // Query for Euler angles
+    serial.write("#E\n");     // Query for Euler angles
     
     //textAlign(CENTER);
     //fill(255);

@@ -1,30 +1,20 @@
 /*------------------------------------------------------------------------------
-Sparkfun Razor IMU M0 AHRS Firmware
+RTL_IMU implementation.
 
 By:         R. T. Lessly
 Date:       2018-05-25
 License:    TBD
 
-This is the source code for firmware to load on the SAMD21 microcontroller of the
-Sparkfun Razor IMU M0 for it to act as a 3-axis Attitude Heading Reference System
-(AHRS). This fimware configures the Razor to act as a slave device to another
-computer via either a Serial port or an I2C port. The firmware is designed to respond
-to a specific set of commands to return 3-axis scaled accelerometer, gyroscope,
-magnetometer, Euler angels (yaw, pitch, roll), and velocity information.
+This is the firmware for the RTL_IMU to load on the SAMD21 microcontroller of the
+Sparkfun Razor IMU M0 for it to act as a 3-axis IMU/AHRS (Inertial Measurement Unit /
+Attitude Heading Reference System). This fimware configures the Razor to act as 
+a slave device to another computer via either a Serial port or an I2C port. The 
+firmware is designed to respond to a specific set of commands to return 3-axis 
+scaled accelerometer, gyroscope, magnetometer, Euler angles (yaw, pitch, roll), 
+compass heading, and velocity information.
 
-All commands begin with "#" and is followed by a letter indicating the requested
-data. The letters are (must be upper case):
-    - a : Return 3-axis acceleration vector in g's
-    - A : Return 3-axis dynamic acceleration vector in g's (gravity component removed)
-    - g : Return 3-axis gyroscope rate vector in radians/sec
-    - G : Return 3-axis integrated gyroscope gimbal angles in degrees
-    - m : Return 3-axis magnetometer vector in milliGuass
-    - V : Return 3-axis integrated velocity vector in meters/sec
-    - E : Return Euler angles as yaw, pitch, roll in degrees
-    - I : Returns the Firmware ID (0x50)
-
-For example, to request Euler angles, send the command "QE" via either I2C or
-the serial port. 
+See RTL_IMU.h for information on the I2C/Serial command codes and sequences recognized
+by this IMU implementation.
 
 The coordinate axes of all vector responses align with the accelerometer and
 gyroscope axes of the MPU-9250 (as documented on Razor circuit board). The
@@ -74,16 +64,17 @@ the slave I2C port (see explanation below).
  Note: The Razor runs on the 3.3v and is not 5v tolerant. To connect it to a 5v
  system such as an Arduino Uno, a bidirectional signal level converter should be
  used to connect the I2C and/or the hardware serial port of the two devices.
- */
+ -----------------------------------------------------------------------------*/
 #include <Arduino.h>
 #include <wiring_private.h> // To get pinPeripheral() function
 #include <Wire.h>
 #include <RTL_Stdlib.h>
 #include <EventFramework.h>
+#include "RTL_IMU.h"
 #include "MPU9250.h"
 
 #define RAZOR_IMU_ADDRESS   ((byte)0x40)
-#define RAZOR_IMU__ID       ((byte)0x50)
+#define RAZOR_IMU_ID       ((byte)0x50)
 
 
 #undef ConsoleStream
@@ -94,52 +85,56 @@ the slave I2C port (see explanation below).
 #endif
 
 
-// Command Codes
-const char CMD_PREFIX    = '#';
-const char CMD_ID        = 'I';
-const char CMD_ACCEL     = 'a';
-const char CMD_DYN_ACCEL = 'A';
-const char CMD_GYRO      = 'g';
-const char CMD_GIMBAL    = 'G';
-const char CMD_MAG       = 'm';
-const char CMD_VELOCITY  = 'V';
-const char CMD_EULER     = 'E';
-const char CMD_CONTINUOS = 'c';
-
-
-// Forward function declarations
-void BlinkLEDCount(uint16_t count, uint16_t onTime=100, uint16_t offTime=100);
-void IndicateFailure();
+ // Forward function declarations
 void ReceiveSerial(Stream& dataStream);
+void RequestSerialID(Stream & dataStream);
+void RequestSerialIsReady(Stream & dataStream);
+void ProcessContinuousModeCommand(Stream& dataStream, const char command, const char param1, const char param2);
+void RequestSerialAccel(Stream& dataStream);
+void RequestSerialDynAccel(Stream & dataStream);
+void RequestSerialGyro(Stream & dataStream);
+void RequestSerialGimbal(Stream & dataStream);
+void RequestSerialMag(Stream & dataStream);
+void RequestSerialVelocity(Stream & dataStream);
+void RequestSerialEuler(Stream & dataStream);
+void BlinkLEDCount(uint16_t count, uint16_t onTime = 100, uint16_t offTime = 100);
+void IndicateFailure();
+
 
 
 // Pin definitions
 int intPin =  4;            // Interrupt pin, 2 and 3 are the Arduino's ext int pins, SAMD uses pin 4
 int HW_LED_PIN = 13;        // Set up pin 13 led for toggling
 
+// Slave I2C connection on SERCOM0 (A3=SDA, A4=SCL)
+TwoWire  slaveI2C = TwoWire(&sercom0, A3, A4);
+
 // The all-important MPU-9250 IMU
 MPU9250 imu;
 
 // IMU sensor data values
-ScaledData accel;           // Scaled accelerometer vector (g)
-ScaledData gyro;            // Scaled gyro rates (radians/sec)
-ScaledData mag;             // Scaled magnetometer vector (milliGaus)
-ScaledData dynAccel;        // Dynamic acceleration (gravity component removed)
-ScaledData velocity;        // Integrated velocity vector (m/s)
-ScaledData gimbal;          // Integrated gimbal angles (degrees)
+Vector3F accel;              // Scaled accelerometer vector (g)
+Vector3F gyro;               // Scaled gyro rates (radians/sec)
+Vector3F mag;                // Scaled magnetometer vector (milliGaus)
+Vector3F dynAccel;           // Dynamic acceleration (gravity component removed)
+Vector3F velocity;           // Integrated velocity vector (m/s)
+Vector3F gimbal;             // Integrated gimbal angles (degrees)
 
 // Housekeeping variables
 uint32_t lastUpdate = 0;    // Time of previous iteration - used to calculate integration interval
+bool ready = false;         // true=the AHRS is ready to work, false=still initializing
 
+// Indicates which values should be output in continuous mode
 bool modeContinuous = false;
-bool velocityContinuous = true;
-bool eulerContinuous = true;
-bool accelContinuous = true;
-bool gyroContinuous = true;
-bool magContinuous = true;
+bool accelContinuous = false;
+bool gyroContinuous = false;
+bool magContinuous = false;
+bool eulerContinuous = false;
+bool dynAccelContinuous = false;
+bool gimbalContinuous = false;
+bool headingContinuous = false;
+bool velocityContinuous = false;
 
-// Slave I2C connection on SERCOM0 (A3=SDA, A4=SCL)
-TwoWire  slaveI2C = TwoWire(&sercom0, A3, A4);
 
 //******************************************************************************
 // IRQ handler for recieving a message on Sercom0
@@ -158,10 +153,10 @@ void setup()
     // Wait for SerialUSB to initialize (max 1 second since startup)
     while (!ConsoleStream && millis() < 1000);
 
-    ConsoleStream << "Basic AHRS: In setup()..." << endl;
+    ConsoleStream << "RTL_IMU_Razor: In setup()..." << endl;
 
     // Start I2C interface, aka Two-Wire Interface (TWI)
-    ConsoleStream << "Basic AHRS: begin I2C Master..." << endl;
+    ConsoleStream << "RTL_IMU_Razor: begin I2C Master..." << endl;
     Wire.begin();
     //TWBR = 12;  // Sets 400 kbit/sec I2C speed
 
@@ -191,7 +186,7 @@ void setup()
     just as we are reporgramming SERCOM0 as a second I2C port, we could reprogram
     another SERCOM as an alternate serial port, if needed.
     --------------------------------------------------------------------------*/
-    ConsoleStream << "Basic AHRS: begin I2C Slave..." << endl;
+    ConsoleStream << "RTL_IMU_Razor: begin I2C Slave..." << endl;
     slaveI2C.begin(RAZOR_IMU_ADDRESS);
 
     // Must reassign pins A3 & A4 to SERCOM functionality
@@ -204,7 +199,7 @@ void setup()
     slaveI2C.onRequest(RequestI2C);         // interrupt handler for data requests
 
     // Configure MPU-9250 interrupt pin, its set as active high, push-pull
-    ConsoleStream << "Basic AHRS: Configure pins..." << endl;
+    ConsoleStream << "RTL_IMU_Razor: Configure pins..." << endl;
     pinMode(intPin, INPUT);
     digitalWrite(intPin, LOW);
 
@@ -213,7 +208,8 @@ void setup()
     digitalWrite(HW_LED_PIN, LOW);
 
     // Verify connectivity with MPU-9250
-    ConsoleStream << "Basic AHRS: Test MPU-9250 connectivity..." << endl;
+    ConsoleStream << "RTL_IMU_Razor: Test MPU-9250 connectivity..." << endl;
+
     if (!imu.TestConnection(ConsoleStream))
     {
         ConsoleStream << "Unable to connect to MPU-9250, Aborting..." << endl;
@@ -226,11 +222,11 @@ void setup()
     float selfTestResults[6];
 
     // Perform self-test, self-calibration, and initialization of MPU-9250
-    ConsoleStream << "Basic AHRS: Performing self test..." << endl;
+    ConsoleStream << "RTL_IMU_Razor: Performing self test..." << endl;
     imu.SelfTest(selfTestResults);
-    ConsoleStream << "Basic AHRS: Performing calibration..." << endl;
+    ConsoleStream << "RTL_IMU_Razor: Performing calibration..." << endl;
     imu.Calibrate(ConsoleStream);
-    ConsoleStream << "Basic AHRS: Starting IMU..." << endl;
+    ConsoleStream << "RTL_IMU_Razor: Starting IMU..." << endl;
     imu.Begin(ConsoleStream);
 
     ConsoleStream << endl;
@@ -255,13 +251,12 @@ void setup()
 
     ConsoleStream << endl;
     ConsoleStream << "MPU-9250 is online..." << endl;
+    ready = true;
 }
 
 
 void loop()
 {
-    const float one_g = 9.80665; // Converts g's to m/s^2
-
     // Remember gyro state vector from previous iteration
     auto prevGyro = gyro;
 
@@ -279,8 +274,8 @@ void loop()
 
     lastUpdate = now;
 
-    //MadgwickQuaternionUpdate(accel.X, accel.Y, accel.Z, gyro.X*PI/180.0f, gyro.Y*PI/180.0f, gyro.Z*PI/180.0f, mag.Y, mag.X, -mag.Z, deltaT);
-    //MahonyQuaternionUpdate(accel.X, accel.Y, accel.Z, gyro.X*PI/180.0f, gyro.Y*PI/180.0f, gyro.Z*PI/180.0f, mag.X, mag.Y, mag.Z, deltaT);
+    //MadgwickQuaternionUpdate(accel.x, accel.y, accel.z, gyro.x*PI/180.0f, gyro.y*PI/180.0f, gyro.z*PI/180.0f, mag.y, mag.x, -mag.z, deltaT);
+    //MahonyQuaternionUpdate(accel.x, accel.y, accel.z, gyro.x*PI/180.0f, gyro.y*PI/180.0f, gyro.z*PI/180.0f, mag.x, mag.y, mag.z, deltaT);
 
     // NOTE: The Mahony filter returns an updated gyro rate vector to correct for gyro drift
     gyro = MahonyQuaternionUpdate(accel, gyro, mag, deltaT);
@@ -288,18 +283,18 @@ void loop()
 
     // Integrate velocity
     auto a = imu.GetDynamicAccel();
-    auto f = 0.5f * one_g * deltaT;
+    auto f = 0.5f * ONE_G * deltaT;
 
-    velocity.X += (a.X + dynAccel.X) * f;
-    velocity.Y += (a.Y + dynAccel.Y) * f;
-    velocity.Z += (a.Z + dynAccel.Z) * f;
+    velocity.x += (a.x + dynAccel.x) * f;
+    velocity.y += (a.y + dynAccel.y) * f;
+    velocity.z += (a.z + dynAccel.z) * f;
     dynAccel = a;
 
     // Integrate gyro rates to update gimbal angles in degrees
     f = 0.5 * (180.0 / PI) * deltaT;
-    gimbal.X += (gyro.X + prevGyro.X) * f;
-    gimbal.Y += (gyro.Y + prevGyro.Y) * f;
-    gimbal.Z += (gyro.Z + prevGyro.Z) * f;
+    gimbal.x += (gyro.x + prevGyro.x) * f;
+    gimbal.y += (gyro.y + prevGyro.y) * f;
+    gimbal.z += (gyro.z + prevGyro.z) * f;
 
     // Check for and process incoming serial requests
     if (DataStream.available())
@@ -310,17 +305,23 @@ void loop()
 
     if (modeContinuous)
     {
-        if (accelContinuous) DataStream << CMD_ACCEL << ' ' << _FLOAT(accel.X, 2) << ' ' << _FLOAT(accel.Y, 2) << ' ' << _FLOAT(accel.Z, 2) << endl;
+        if (accelContinuous) RequestSerialAccel(DataStream);
 
-        if (gyroContinuous) DataStream << CMD_GYRO << ' ' << _FLOAT(gyro.X, 2) << ' ' << _FLOAT(gyro.Y, 2) << ' ' << _FLOAT(gyro.Z, 2) << endl;
+        if (gyroContinuous) RequestSerialGyro(DataStream);
         
-        if (magContinuous) DataStream << CMD_MAG << ' ' << _FLOAT(mag.X, 2) << ' ' << _FLOAT(mag.Y, 2) << ' ' << _FLOAT(mag.Z, 2) << endl;
+        if (magContinuous) RequestSerialMag(DataStream);
 
-        if (eulerContinuous) DataStream << CMD_EULER << ' ' << _FLOAT(yaw, 2) << ' ' << _FLOAT(pitch, 2) << ' ' << _FLOAT(roll, 2) << endl;
+        if (eulerContinuous) RequestSerialEuler(DataStream);
 
-        if (velocityContinuous) DataStream << CMD_VELOCITY << ' ' << _FLOAT(velocity.X, 2) << ' ' << _FLOAT(velocity.Y, 2) << ' ' << _FLOAT(velocity.Z, 2) << endl;
+        if (dynAccelContinuous) RequestSerialDynAccel(DataStream);
 
-        // Toggle LED to indicate communication occurred
+        if (velocityContinuous) RequestSerialVelocity(DataStream);
+
+        if (gimbalContinuous) RequestSerialGimbal(DataStream);
+
+        if (headingContinuous) RequestSerialHeading(DataStream);
+
+        // Toggle LED to indicate continuous mode active
         digitalWrite(HW_LED_PIN, !digitalRead(HW_LED_PIN));
     }
 }
@@ -354,7 +355,11 @@ static void RequestI2C()
         switch (commandBuffer[1])
         {
             case CMD_ID:
-                slaveI2C.write(RAZOR_IMU__ID);
+                slaveI2C.write(RAZOR_IMU_ID);
+                break;
+
+            case CMD_IS_READY:
+                slaveI2C.write(ready ? 1 : 0);
                 break;
 
             case CMD_ACCEL:
@@ -383,6 +388,10 @@ static void RequestI2C()
 
             case CMD_EULER:
                 slaveI2C.write((uint8_t*)&eulerAngles, sizeof(eulerAngles));
+                break;
+
+            case CMD_ZERO:
+                velocity.x = velocity.y = velocity.z = 0.0;
                 break;
 
             default:
@@ -422,97 +431,206 @@ void RequestSerial(Stream& dataStream)
 
     if (commandBuffer[0] == CMD_PREFIX)
     {
-        switch (commandBuffer[1])
+        auto command = commandBuffer[1];
+
+        switch (command)
         {
             case CMD_ID:
-                DataStream << CMD_ID << ' ' << _HEX(RAZOR_IMU__ID) << endl;
+                RequestSerialID(dataStream);
                 break;
 
-            // Send acceleration vector
+            case CMD_IS_READY:
+                RequestSerialIsReady(dataStream);
+                break;
+
+                // Send acceleration vector
             case CMD_ACCEL:
-                DataStream << CMD_ACCEL << ' ' << _FLOAT(accel.X, 2) << ' ' << _FLOAT(accel.Y, 2) << ' ' << _FLOAT(accel.Z, 2) << endl;
+                RequestSerialAccel(dataStream);
                 break;
 
             // Send dynamic acceleration vector
             case CMD_DYN_ACCEL:
-                DataStream << CMD_DYN_ACCEL << ' ' << _FLOAT(dynAccel.X, 2) << ' ' << _FLOAT(dynAccel.Y, 2) << ' ' << _FLOAT(dynAccel.Z, 2) << endl;
+                RequestSerialDynAccel(dataStream);
                 break;
 
             // Send gyro rates vector
             case CMD_GYRO:
-                DataStream << CMD_GYRO << ' ' << _FLOAT(gyro.X, 2) << ' ' << _FLOAT(gyro.Y, 2) << ' ' << _FLOAT(gyro.Z, 2) << endl;
+                RequestSerialGyro(dataStream);
                 break;
 
             // Send gimbal angles vector
             case CMD_GIMBAL:
-                DataStream << CMD_GIMBAL << ' ' << _FLOAT(gimbal.X, 2) << ' ' << _FLOAT(gimbal.Y, 2) << ' ' << _FLOAT(gimbal.Z, 2) << endl;
+                RequestSerialGimbal(dataStream);
                 break;
 
             // Send magnetometer vector
             case CMD_MAG:
-                DataStream << CMD_MAG << ' ' << _FLOAT(mag.X, 2) << ' ' << _FLOAT(mag.Y, 2) << ' ' << _FLOAT(mag.Z, 2) << endl;
+                RequestSerialMag(dataStream);
                 break;
 
             // Send velocity vector
             case CMD_VELOCITY:
-                DataStream << CMD_VELOCITY << ' ' << _FLOAT(velocity.X, 2) << ' ' << _FLOAT(velocity.Y, 2) << ' ' << _FLOAT(velocity.Z, 2) << endl;
+                RequestSerialVelocity(dataStream);
                 break;
 
             // Send Euler angles
             case CMD_EULER:
-                DataStream << CMD_EULER << ' ' << _FLOAT(yaw, 2) << ' ' << _FLOAT(pitch, 2) << ' ' << _FLOAT(roll, 2) << endl;
+                RequestSerialEuler(dataStream);
+                break;
+
+            case CMD_ZERO:
+                velocity.x = velocity.y = velocity.z = 0.0;
+                break;
+
+            case CMD_HEADING:
+                RequestSerialHeading(dataStream);
                 break;
 
             case CMD_CONTINUOS:
             {
-                auto param = commandBuffer[2];
+                auto param1 = (char)commandBuffer[2];
+                auto param2 = (char)commandBuffer[3];
 
-                switch (param)
-                {
-                    case '1':
-                        modeContinuous = true;
-                        DataStream << CMD_CONTINUOS << ' ' << "ON" << endl;
-                        break;
-                    case '0':
-                        modeContinuous = false;
-                        DataStream << CMD_CONTINUOS << ' ' << "OFF" << endl;
-                        break;
-                    case 'a':
-                        accelContinuous = commandBuffer[3] == '1';
-                        DataStream << CMD_CONTINUOS << " accel " << (accelContinuous ? "ON" : "OFF") << endl;
-                        break;
-                    case 'g':
-                        gyroContinuous = commandBuffer[3] == '1';
-                        DataStream << CMD_CONTINUOS << " gyro " << (gyroContinuous ? "ON" : "OFF") << endl;
-                        break;
-                    case 'm':
-                        magContinuous = commandBuffer[3] == '1';
-                        DataStream << CMD_CONTINUOS << " mag " << (magContinuous ? "ON" : "OFF") << endl;
-                        break;
-                    case 'E':
-                        eulerContinuous = commandBuffer[3] == '1';
-                        DataStream << CMD_CONTINUOS << " euler " << (eulerContinuous ? "ON" : "OFF") << endl;
-                        break;
-                    case 'V':
-                        velocityContinuous = commandBuffer[3] == '1';
-                        DataStream << CMD_CONTINUOS << " velocity " << (velocityContinuous ? "ON" : "OFF") << endl;
-                        break;
-                }
+                ProcessContinuousModeCommand(dataStream, command, param1, param2);
                 break;
             }
 
             default:
-                DataStream << "0xFE" << endl;   // 0xFE=Unrecognized command code
+                dataStream << "0xFE" << endl;   // 0xFE=Unrecognized command code
                 break;
         }
     }
     else
     {
-        DataStream << "0xFF" << endl;           // 0xFF=Unrecognized command string
+        dataStream << "0xFF" << endl;           // 0xFF=Unrecognized command string
     }
 
     // Clears command buffer
     commandBuffer[0] = 0;
+}
+
+
+void ProcessContinuousModeCommand(Stream& dataStream, const char command, const char param1, const char param2)
+{
+    switch (param1)
+    {
+    case '1':
+    case '0':
+        modeContinuous = param1 == '1';
+        dataStream << '!' << command << ' ' << modeContinuous << endl;
+        break;
+    case '9':
+    {
+        auto enableAll = param1 == '1';
+
+        accelContinuous = enableAll;
+        gyroContinuous = enableAll;
+        magContinuous = enableAll;
+        eulerContinuous = enableAll;
+        dynAccelContinuous = enableAll;
+        velocityContinuous = enableAll;
+        gimbalContinuous = enableAll;
+        dataStream << '!' << command << ' ' << enableAll << endl;
+        break;
+    }
+    case CMD_ACCEL:
+        accelContinuous = param2 == '1';
+        dataStream << '!' << command << param1 << ' ' << accelContinuous << endl;
+        break;
+    case CMD_GYRO:
+        gyroContinuous = param2 == '1';
+        dataStream << '!' << command << param1 << ' ' << gyroContinuous << endl;
+        break;
+    case CMD_MAG:
+        magContinuous = param2 == '1';
+        dataStream << '!' << command << param1 << ' ' << magContinuous << endl;
+        break;
+    case CMD_EULER:
+        eulerContinuous = param2 == '1';
+        dataStream << '!' << command << param1 << ' ' << eulerContinuous << endl;
+        break;
+    case CMD_DYN_ACCEL:
+        dynAccelContinuous = param2 == '1';
+        dataStream << '!' << command << param1 << ' ' << dynAccelContinuous << endl;
+        break;
+    case CMD_VELOCITY:
+        velocityContinuous = param2 == '1';
+        dataStream << '!' << command << param1 << ' ' << velocityContinuous << endl;
+        break;
+    case CMD_GIMBAL:
+        gimbalContinuous = param2 == '1';
+        dataStream << '!' << command << param1 << ' ' << gimbalContinuous << endl;
+        break;
+    case CMD_HEADING:
+        headingContinuous = param2 == '1';
+        dataStream << '!' << command << param1 << ' ' << headingContinuous << endl;
+        break;
+    }
+}
+
+
+void RequestSerialID(Stream & dataStream)
+{
+    dataStream << '#' << CMD_ID << ' ' << _HEX(RAZOR_IMU_ID) << endl;
+}
+
+
+void RequestSerialIsReady(Stream & dataStream)
+{
+    dataStream << '#' << CMD_IS_READY << ' ' << (ready ? '1' : '0') << endl;
+}
+
+
+void RequestSerialAccel(Stream& dataStream)
+{
+    dataStream << '#' << CMD_ACCEL << ' ' << _FLOAT(accel.x, 2) << ' ' << _FLOAT(accel.y, 2) << ' ' << _FLOAT(accel.z, 2) << endl;
+}
+
+
+void RequestSerialGyro(Stream & dataStream)
+{
+    dataStream << '#' << CMD_GYRO << ' ' << _FLOAT(gyro.x, 2) << ' ' << _FLOAT(gyro.y, 2) << ' ' << _FLOAT(gyro.z, 2) << endl;
+}
+
+
+void RequestSerialMag(Stream & dataStream)
+{
+    //auto magRaw = imu.GetMagRaw();
+
+    dataStream << '#' << CMD_MAG << ' ' << _FLOAT(mag.x, 2) << ' ' << _FLOAT(mag.y, 2) << ' ' << _FLOAT(mag.z, 2) << endl;
+    //dataStream << '#' << CMD_MAG << ' ' << magRaw.x << ' ' << magRaw.y << ' ' << magRaw.z << endl;
+}
+
+
+void RequestSerialEuler(Stream & dataStream)
+{
+    dataStream << '#' << CMD_EULER << ' ' << _FLOAT(eulerAngles.Yaw, 2) << ' ' << _FLOAT(eulerAngles.Pitch, 2) << ' ' << _FLOAT(eulerAngles.Roll, 2) << endl;
+}
+
+
+void RequestSerialHeading(Stream & dataStream)
+{
+    auto heading = imu.GetCompassHeadingDegrees();
+
+    dataStream << '#' << CMD_HEADING << ' ' << _FLOAT(heading, 2) << endl;
+}
+
+
+void RequestSerialVelocity(Stream & dataStream)
+{
+    dataStream << '#' << CMD_VELOCITY << ' ' << _FLOAT(velocity.x, 2) << ' ' << _FLOAT(velocity.y, 2) << ' ' << _FLOAT(velocity.z, 2) << endl;
+}
+
+
+void RequestSerialGimbal(Stream & dataStream)
+{
+    dataStream << '#' << CMD_GIMBAL << ' ' << _FLOAT(gimbal.x, 2) << ' ' << _FLOAT(gimbal.y, 2) << ' ' << _FLOAT(gimbal.z, 2) << endl;
+}
+
+
+void RequestSerialDynAccel(Stream & dataStream)
+{
+    dataStream << '#' << CMD_DYN_ACCEL << ' ' << _FLOAT(dynAccel.x, 2) << ' ' << _FLOAT(dynAccel.y, 2) << ' ' << _FLOAT(dynAccel.z, 2) << endl;
 }
 
 
