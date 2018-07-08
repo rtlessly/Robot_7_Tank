@@ -24,12 +24,12 @@ Command Codes for IMU
 All commands begin with "#" and is followed by a letter indicating the requested
 operation.The command codes are:
 
-- a : Return 3-axis acceleration vector in g's
-- A : Return 3-axis dynamic acceleration vector in g's (gravity component removed)
-- g : Return 3-axis gyroscope rate vector in radians / sec
-- G : Return 3-axis integrated gyroscope gimbal angles in degrees
-- m : Return 3-axis magnetometer vector in milliGuass
-- V : Return 3-axis integrated velocity vector in meters / sec
+- a : Return 3-axis acceleration vector in g's (as Vector3F)
+- A : Return raw 3-axis acceleration sensor data (as Vector3I)
+- g : Return 3-axis gyroscope rate vector in radians / sec (as Vector3F)
+- G : Return raw 3-axis gyroscope sensor data (as Vector3I)
+- m : Return 3-axis magnetometer vector in milliGuass (as Vector3F)
+- M : Return raw 3-axis magnetometer sensor data (as Vector3I)
 - E : Return Euler angles as yaw, pitch, roll in degrees
 - h : Returns the compass heading in degrees (0 = North, 90 = East, 180 = South, 270 = West)
 - I : Returns the device ID(0x50)
@@ -51,38 +51,64 @@ Note: Continuous mode is not available via the I2C interface, it only works via
       the serial port.
 *******************************************************************************/
 
-const char CMD_PREFIX = '#';
-const char CMD_IS_READY = 'r';
-const char CMD_ID = 'I';
-const char CMD_ACCEL = 'a';
-const char CMD_DYN_ACCEL = 'A';
-const char CMD_GYRO = 'g';
-const char CMD_GIMBAL = 'G';
-const char CMD_MAG = 'm';
-const char CMD_VELOCITY = 'V';
-const char CMD_EULER = 'E';
-const char CMD_CONTINUOS = 'c';
-const char CMD_ZERO = 'z';
-const char CMD_HEADING = 'h';
+const byte PREFIX_RESPONSE = '#';
+const byte PREFIX_ERR = '!';
+const byte PREFIX_CMD = '.';
 
+const byte CMD_IS_READY = 'r';
+const byte CMD_ID = 'I';
+const byte CMD_ACCEL = 'a';
+const byte CMD_ACCEL_RAW = 'A';
+const byte CMD_GYRO = 'g';
+const byte CMD_GYRO_RAW = 'G';
+const byte CMD_MAG = 'm';
+const byte CMD_MAG_RAW = 'M';
+const byte CMD_EULER = 'E';
+const byte CMD_HEADING = 'h';
+const byte CMD_CONTINUOS = 'c';
+const byte CMD_ZERO = 'z';
+const byte CMD_SETTING = 's';
 
-//struct RawData 
-//{
-//    int16_t X;
-//    int16_t Y;
-//    int16_t Z;
-//    RawData() : X(0), Y(0), Z(0) {};
-//    RawData(int16_t x, int16_t y, int16_t z) : X(x), Y(y), Z(z) {};
-//};
+const byte SETTING_MAG_BIAS = 'm';
+const byte SETTING_X = 'x';
+const byte SETTING_Y = 'y';
+const byte SETTING_Z = 'z';
 
-//struct Vector3F : Vector3<float>
-//{
-//    float X;
-//    float Y;
-//    float Z;
-//    Vector3F() : X(0), Y(0), Z(0) {};
-//    Vector3F(float x, float y, float z) : X(x), Y(y), Z(z) {};
-//};
+const byte REG_CONTROL = 0x01;
+const byte REG_CONTROL_LEN = sizeof(byte);
+const byte REG_IS_READY = REG_CONTROL;
+const byte REG_IS_READY_LEN = REG_CONTROL_LEN;
+const byte REG_ID = REG_CONTROL + REG_CONTROL_LEN;
+const byte REG_ID_LEN = sizeof(byte);
+
+const byte REG_ACCEL = REG_ID + REG_ID_LEN;
+const byte REG_ACCEL_LEN = sizeof(float) * 3;
+const byte REG_GYRO = REG_ACCEL + REG_ACCEL_LEN;
+const byte REG_GYRO_LEN = sizeof(float) * 3;
+const byte REG_MAG = REG_GYRO + REG_GYRO_LEN;
+const byte REG_MAG_LEN = sizeof(float) * 3;
+
+const byte REG_ACCEL_RAW = REG_MAG + REG_MAG_LEN;
+const byte REG_ACCEL_RAW_LEN = sizeof(int16_t) * 3;
+const byte REG_GYRO_RAW = REG_ACCEL_RAW + REG_ACCEL_RAW_LEN;
+const byte REG_GYRO_RAW_LEN = sizeof(int16_t) * 3;
+const byte REG_MAG_RAW = REG_GYRO_RAW + REG_GYRO_RAW_LEN;
+const byte REG_MAG_RAW_LEN = sizeof(int16_t) * 3;
+
+const byte REG_EULER = REG_MAG_RAW + REG_MAG_RAW_LEN;
+const byte REG_EULER_LEN = sizeof(float) * 3;
+const byte REG_HEADING = REG_EULER + REG_EULER_LEN;
+const byte REG_HEADING_LEN = sizeof(float);
+
+const byte REG_MAGBIAS_X = REG_HEADING + REG_HEADING_LEN;
+const byte REG_MAGBIAS_X_LEN = sizeof(int16_t);
+const byte REG_MAGBIAS_Y = REG_MAGBIAS_X + REG_MAGBIAS_X_LEN;
+const byte REG_MAGBIAS_Y_LEN = sizeof(int16_t);
+const byte REG_MAGBIAS_Z = REG_MAGBIAS_Y + REG_MAGBIAS_Y_LEN;
+const byte REG_MAGBIAS_Z_LEN = sizeof(int16_t);
+
+const char ERR_BAD_CMD_STRING = 0x81;
+const char ERR_CMD_UNRECOGNIZED = 0x82;
 
 
 struct EulerAngles

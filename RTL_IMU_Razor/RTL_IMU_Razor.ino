@@ -87,16 +87,14 @@ the slave I2C port (see explanation below).
 
  // Forward function declarations
 void ReceiveSerial(Stream& dataStream);
-void RequestSerialID(Stream & dataStream);
-void RequestSerialIsReady(Stream & dataStream);
+void RequestSerialID(Stream& dataStream);
+void RequestSerialIsReady(Stream& dataStream);
 void ProcessContinuousModeCommand(Stream& dataStream, const char command, const char param1, const char param2);
-void RequestSerialAccel(Stream& dataStream);
-void RequestSerialDynAccel(Stream & dataStream);
-void RequestSerialGyro(Stream & dataStream);
-void RequestSerialGimbal(Stream & dataStream);
-void RequestSerialMag(Stream & dataStream);
-void RequestSerialVelocity(Stream & dataStream);
-void RequestSerialEuler(Stream & dataStream);
+void RequestSerialAccel(Stream& dataStream, bool modeRaw=false);
+void RequestSerialGyro(Stream& dataStream, bool modeRaw = false);
+void RequestSerialMag(Stream& dataStream, bool modeRaw = false);
+void RequestSerialEuler(Stream& dataStream);
+void RequestSerialHeading(Stream& dataStream);
 void BlinkLEDCount(uint16_t count, uint16_t onTime = 100, uint16_t offTime = 100);
 void IndicateFailure();
 
@@ -113,12 +111,13 @@ TwoWire  slaveI2C = TwoWire(&sercom0, A3, A4);
 MPU9250 imu;
 
 // IMU sensor data values
-Vector3F accel;              // Scaled accelerometer vector (g)
-Vector3F gyro;               // Scaled gyro rates (radians/sec)
-Vector3F mag;                // Scaled magnetometer vector (milliGaus)
-Vector3F dynAccel;           // Dynamic acceleration (gravity component removed)
-Vector3F velocity;           // Integrated velocity vector (m/s)
-Vector3F gimbal;             // Integrated gimbal angles (degrees)
+Vector3F acc;             // Scaled accelerometer vector (g)
+Vector3F gyro;              // Scaled gyro rates (radians/sec)
+Vector3F mag;               // Scaled magnetometer vector (milliGaus)
+Vector3F dynAccel;          // Dynamic acceleration (gravity component removed)
+Vector3F velocity;          // Integrated velocity vector (m/s)
+Vector3F gimbal;            // Integrated gimbal angles (degrees)
+float    heading;           // Compass heading
 
 // Housekeeping variables
 uint32_t lastUpdate = 0;    // Time of previous iteration - used to calculate integration interval
@@ -130,10 +129,10 @@ bool accelContinuous = false;
 bool gyroContinuous = false;
 bool magContinuous = false;
 bool eulerContinuous = false;
-bool dynAccelContinuous = false;
-bool gimbalContinuous = false;
 bool headingContinuous = false;
-bool velocityContinuous = false;
+bool accelRaw = false;
+bool gyroRaw = false;
+bool magRaw = false;
 
 
 //******************************************************************************
@@ -153,7 +152,9 @@ void setup()
     // Wait for SerialUSB to initialize (max 1 second since startup)
     while (!ConsoleStream && millis() < 1000);
 
-    ConsoleStream << "RTL_IMU_Razor: In setup()..." << endl;
+    // Configure LED pin
+    pinMode(HW_LED_PIN, OUTPUT);
+    digitalWrite(HW_LED_PIN, LOW);
 
     // Start I2C interface, aka Two-Wire Interface (TWI)
     ConsoleStream << "RTL_IMU_Razor: begin I2C Master..." << endl;
@@ -202,10 +203,6 @@ void setup()
     ConsoleStream << "RTL_IMU_Razor: Configure pins..." << endl;
     pinMode(intPin, INPUT);
     digitalWrite(intPin, LOW);
-
-    // Configure LED pin
-    pinMode(HW_LED_PIN, OUTPUT);
-    digitalWrite(HW_LED_PIN, LOW);
 
     // Verify connectivity with MPU-9250
     ConsoleStream << "RTL_IMU_Razor: Test MPU-9250 connectivity..." << endl;
@@ -264,7 +261,7 @@ void loop()
     imu.Update();
 
     // Get new scaled state vectors
-    accel = imu.GetAccel();
+    acc = imu.GetAccel();
     gyro = imu.GetGyro();
     mag = imu.GetMag();
 
@@ -278,23 +275,24 @@ void loop()
     //MahonyQuaternionUpdate(accel.x, accel.y, accel.z, gyro.x*PI/180.0f, gyro.y*PI/180.0f, gyro.z*PI/180.0f, mag.x, mag.y, mag.z, deltaT);
 
     // NOTE: The Mahony filter returns an updated gyro rate vector to correct for gyro drift
-    gyro = MahonyQuaternionUpdate(accel, gyro, mag, deltaT);
+    gyro = MahonyQuaternionUpdate(acc, gyro, mag, deltaT);
+    heading = imu.UpdateCompassHeading(mag, acc, deltaT);
     UpdateEulerAngles();
 
-    // Integrate velocity
-    auto a = imu.GetDynamicAccel();
-    auto f = 0.5f * ONE_G * deltaT;
+    //// Integrate velocity
+    //auto a = imu.GetDynamicAccel();
+    //auto f = 0.5f * ONE_G * deltaT;
 
-    velocity.x += (a.x + dynAccel.x) * f;
-    velocity.y += (a.y + dynAccel.y) * f;
-    velocity.z += (a.z + dynAccel.z) * f;
-    dynAccel = a;
+    //velocity.x += (a.x + dynAccel.x) * f;
+    //velocity.y += (a.y + dynAccel.y) * f;
+    //velocity.z += (a.z + dynAccel.z) * f;
+    //dynAccel = a;
 
-    // Integrate gyro rates to update gimbal angles in degrees
-    f = 0.5 * (180.0 / PI) * deltaT;
-    gimbal.x += (gyro.x + prevGyro.x) * f;
-    gimbal.y += (gyro.y + prevGyro.y) * f;
-    gimbal.z += (gyro.z + prevGyro.z) * f;
+    //// Integrate gyro rates to update gimbal angles in degrees
+    //f = 0.5 * (180.0 / PI) * deltaT;
+    //gimbal.x += (gyro.x + prevGyro.x) * f;
+    //gimbal.y += (gyro.y + prevGyro.y) * f;
+    //gimbal.z += (gyro.z + prevGyro.z) * f;
 
     // Check for and process incoming serial requests
     if (DataStream.available())
@@ -305,19 +303,13 @@ void loop()
 
     if (modeContinuous)
     {
-        if (accelContinuous) RequestSerialAccel(DataStream);
+        if (accelContinuous) RequestSerialAccel(DataStream, accelRaw);
 
-        if (gyroContinuous) RequestSerialGyro(DataStream);
+        if (gyroContinuous) RequestSerialGyro(DataStream, gyroRaw);
         
-        if (magContinuous) RequestSerialMag(DataStream);
+        if (magContinuous) RequestSerialMag(DataStream, magRaw);
 
         if (eulerContinuous) RequestSerialEuler(DataStream);
-
-        if (dynAccelContinuous) RequestSerialDynAccel(DataStream);
-
-        if (velocityContinuous) RequestSerialVelocity(DataStream);
-
-        if (gimbalContinuous) RequestSerialGimbal(DataStream);
 
         if (headingContinuous) RequestSerialHeading(DataStream);
 
@@ -342,6 +334,33 @@ static void ReceiveI2C(int messageLength)
     while (bytesRead < maxLength) commandBuffer[bytesRead++] = slaveI2C.read();
 
     commandBuffer[bytesRead] = 0;
+
+    switch (commandBuffer[0])
+    {
+    case REG_MAGBIAS_X:
+    {
+        auto data = *(int16_t*)&commandBuffer[1];
+
+        imu.SetMagBiasX(data);
+    }
+    break;
+
+    case REG_MAGBIAS_Y:
+    {
+        auto data = *(int16_t*)&commandBuffer[1];
+
+        imu.SetMagBiasY(data);
+    }
+    break;
+
+    case REG_MAGBIAS_Z:
+    {
+        auto data = *(int16_t*)&commandBuffer[1];
+
+        imu.SetMagBiasZ(data);
+    }
+    break;
+    }
 }
 
 
@@ -350,58 +369,67 @@ static void ReceiveI2C(int messageLength)
 //****************************************************************************
 static void RequestI2C()
 {
-    if (commandBuffer[0] == CMD_PREFIX)
+    switch (commandBuffer[0])
     {
-        switch (commandBuffer[1])
+        case REG_ID:
+            slaveI2C.write(RAZOR_IMU_ID);
+            break;
+
+        case REG_IS_READY:
+            slaveI2C.write(ready ? 1 : 0);
+            break;
+
+        case REG_ACCEL:
+            slaveI2C.write((uint8_t*)&acc, sizeof(acc));
+            break;
+
+        case REG_GYRO:
+            slaveI2C.write((uint8_t*)&gyro, sizeof(gyro));
+            break;
+
+        case REG_MAG:
+            slaveI2C.write((uint8_t*)&mag, sizeof(mag));
+            break;
+
+        case REG_ACCEL_RAW:
         {
-            case CMD_ID:
-                slaveI2C.write(RAZOR_IMU_ID);
-                break;
+            auto data = imu.GetAccelRaw();
 
-            case CMD_IS_READY:
-                slaveI2C.write(ready ? 1 : 0);
-                break;
-
-            case CMD_ACCEL:
-                slaveI2C.write((uint8_t*)&accel, sizeof(accel));
-                break;
-
-            case CMD_DYN_ACCEL:
-                slaveI2C.write((uint8_t*)&dynAccel, sizeof(dynAccel));
-                break;
-
-            case CMD_GYRO:
-                slaveI2C.write((uint8_t*)&gyro, sizeof(gyro));
-                break;
-
-            case CMD_GIMBAL:
-                slaveI2C.write((uint8_t*)&gimbal, sizeof(gimbal));
-                break;
-
-            case CMD_MAG:
-                slaveI2C.write((uint8_t*)&mag, sizeof(mag));
-                break;
-
-            case CMD_VELOCITY:
-                slaveI2C.write((uint8_t*)&velocity, sizeof(velocity));
-                break;
-
-            case CMD_EULER:
-                slaveI2C.write((uint8_t*)&eulerAngles, sizeof(eulerAngles));
-                break;
-
-            case CMD_ZERO:
-                velocity.x = velocity.y = velocity.z = 0.0;
-                break;
-
-            default:
-                slaveI2C.write((uint8_t)0xFE);   // 0xFE=Unrecognized command code
-                break;
+            slaveI2C.write((uint8_t*)&data, sizeof(data));
         }
-    }
-    else
-    {
-        slaveI2C.write((uint8_t)0xFF);           // 0xFF=Unrecognized command string
+        break;
+
+        case REG_GYRO_RAW:
+        {
+            auto data = imu.GetGyroRaw();
+
+            slaveI2C.write((uint8_t*)&data, sizeof(data));
+        }
+        break;
+
+        case REG_MAG_RAW:
+        {
+            auto data = imu.GetMagRaw();
+
+            slaveI2C.write((uint8_t*)&data, sizeof(data));
+        }
+        break;
+
+        case REG_EULER:
+            slaveI2C.write((uint8_t*)&eulerAngles, sizeof(eulerAngles));
+            break;
+
+        case REG_HEADING:
+            slaveI2C.write((uint8_t*)&heading, sizeof(heading));
+            break;
+
+        //case CMD_ZERO:
+        //    velocity.x = velocity.y = velocity.z = 0.0;
+        //    break;
+
+        default:
+            slaveI2C.write((uint8_t)0x00);   // 0x00=Unrecognized command code
+            break;
     }
 
     // Clears command buffer
@@ -429,9 +457,12 @@ void RequestSerial(Stream& dataStream)
 {
     if (commandBuffer[0] == 0) return;
 
-    if (commandBuffer[0] == CMD_PREFIX)
+
+    if (commandBuffer[0] == PREFIX_CMD)
     {
-        auto command = commandBuffer[1];
+        auto command = (char)commandBuffer[1];
+        auto param1 = (char)commandBuffer[2];
+        auto param2 = (char)commandBuffer[3];
 
         switch (command)
         {
@@ -443,34 +474,22 @@ void RequestSerial(Stream& dataStream)
                 RequestSerialIsReady(dataStream);
                 break;
 
-                // Send acceleration vector
+            // Send acceleration vector
             case CMD_ACCEL:
-                RequestSerialAccel(dataStream);
-                break;
-
-            // Send dynamic acceleration vector
-            case CMD_DYN_ACCEL:
-                RequestSerialDynAccel(dataStream);
+            case CMD_ACCEL_RAW:
+                RequestSerialAccel(dataStream, command == CMD_ACCEL_RAW);
                 break;
 
             // Send gyro rates vector
             case CMD_GYRO:
-                RequestSerialGyro(dataStream);
-                break;
-
-            // Send gimbal angles vector
-            case CMD_GIMBAL:
-                RequestSerialGimbal(dataStream);
+            case CMD_GYRO_RAW:
+                RequestSerialGyro(dataStream, command == CMD_GYRO_RAW);
                 break;
 
             // Send magnetometer vector
             case CMD_MAG:
-                RequestSerialMag(dataStream);
-                break;
-
-            // Send velocity vector
-            case CMD_VELOCITY:
-                RequestSerialVelocity(dataStream);
+            case CMD_MAG_RAW:
+                RequestSerialMag(dataStream, command == CMD_MAG_RAW);
                 break;
 
             // Send Euler angles
@@ -478,31 +497,27 @@ void RequestSerial(Stream& dataStream)
                 RequestSerialEuler(dataStream);
                 break;
 
-            case CMD_ZERO:
-                velocity.x = velocity.y = velocity.z = 0.0;
-                break;
-
+            // Send compass heading
             case CMD_HEADING:
                 RequestSerialHeading(dataStream);
                 break;
 
-            case CMD_CONTINUOS:
-            {
-                auto param1 = (char)commandBuffer[2];
-                auto param2 = (char)commandBuffer[3];
+            case CMD_ZERO:
+                velocity.x = velocity.y = velocity.z = 0.0;
+                break;
 
+            case CMD_CONTINUOS:
                 ProcessContinuousModeCommand(dataStream, command, param1, param2);
                 break;
-            }
 
             default:
-                dataStream << "0xFE" << endl;   // 0xFE=Unrecognized command code
+                dataStream << PREFIX_ERR << _HEX(ERR_CMD_UNRECOGNIZED) << endl;
                 break;
         }
     }
     else
     {
-        dataStream << "0xFF" << endl;           // 0xFF=Unrecognized command string
+        dataStream << PREFIX_ERR << _HEX(ERR_BAD_CMD_STRING) << endl;
     }
 
     // Clears command buffer
@@ -517,120 +532,104 @@ void ProcessContinuousModeCommand(Stream& dataStream, const char command, const 
     case '1':
     case '0':
         modeContinuous = param1 == '1';
-        dataStream << '!' << command << ' ' << modeContinuous << endl;
+        dataStream << PREFIX_RESPONSE << command << ' ' << modeContinuous << endl;
         break;
+    
     case '9':
     {
-        auto enableAll = param1 == '1';
+        auto enableAll = param2 == '1';
 
         accelContinuous = enableAll;
         gyroContinuous = enableAll;
         magContinuous = enableAll;
         eulerContinuous = enableAll;
-        dynAccelContinuous = enableAll;
-        velocityContinuous = enableAll;
-        gimbalContinuous = enableAll;
-        dataStream << '!' << command << ' ' << enableAll << endl;
+        headingContinuous = enableAll;
+        dataStream << PREFIX_RESPONSE << command << ' ' << enableAll << endl;
         break;
     }
+    
+    case CMD_ACCEL_RAW:
     case CMD_ACCEL:
+        accelRaw = param1 == CMD_ACCEL_RAW;
         accelContinuous = param2 == '1';
-        dataStream << '!' << command << param1 << ' ' << accelContinuous << endl;
+        dataStream << PREFIX_RESPONSE << command << param1 << ' ' << accelContinuous << endl;
         break;
+    
     case CMD_GYRO:
+    case CMD_GYRO_RAW:
+        gyroRaw = param1 == CMD_GYRO_RAW;
         gyroContinuous = param2 == '1';
-        dataStream << '!' << command << param1 << ' ' << gyroContinuous << endl;
+        dataStream << PREFIX_RESPONSE << command << param1 << ' ' << gyroContinuous << endl;
         break;
+    
     case CMD_MAG:
+    case CMD_MAG_RAW:
+        magRaw = param1 == CMD_MAG_RAW;
         magContinuous = param2 == '1';
-        dataStream << '!' << command << param1 << ' ' << magContinuous << endl;
+        dataStream << PREFIX_RESPONSE << command << param1 << ' ' << magContinuous << endl;
         break;
+    
     case CMD_EULER:
         eulerContinuous = param2 == '1';
-        dataStream << '!' << command << param1 << ' ' << eulerContinuous << endl;
+        dataStream << PREFIX_RESPONSE << command << param1 << ' ' << eulerContinuous << endl;
         break;
-    case CMD_DYN_ACCEL:
-        dynAccelContinuous = param2 == '1';
-        dataStream << '!' << command << param1 << ' ' << dynAccelContinuous << endl;
-        break;
-    case CMD_VELOCITY:
-        velocityContinuous = param2 == '1';
-        dataStream << '!' << command << param1 << ' ' << velocityContinuous << endl;
-        break;
-    case CMD_GIMBAL:
-        gimbalContinuous = param2 == '1';
-        dataStream << '!' << command << param1 << ' ' << gimbalContinuous << endl;
-        break;
+    
     case CMD_HEADING:
         headingContinuous = param2 == '1';
-        dataStream << '!' << command << param1 << ' ' << headingContinuous << endl;
+        dataStream << PREFIX_RESPONSE << command << param1 << ' ' << headingContinuous << endl;
         break;
     }
 }
 
 
-void RequestSerialID(Stream & dataStream)
+void RequestSerialID(Stream& dataStream)
 {
-    dataStream << '#' << CMD_ID << ' ' << _HEX(RAZOR_IMU_ID) << endl;
+    dataStream << PREFIX_RESPONSE << CMD_ID << ' ' << _HEX(RAZOR_IMU_ID) << endl;
 }
 
 
-void RequestSerialIsReady(Stream & dataStream)
+void RequestSerialIsReady(Stream& dataStream)
 {
-    dataStream << '#' << CMD_IS_READY << ' ' << (ready ? '1' : '0') << endl;
+    dataStream << PREFIX_RESPONSE << CMD_IS_READY << ' ' << (ready ? '1' : '0') << endl;
 }
 
 
-void RequestSerialAccel(Stream& dataStream)
+void RequestSerialAccel(Stream& dataStream, bool modeRaw)
 {
-    dataStream << '#' << CMD_ACCEL << ' ' << _FLOAT(accel.x, 2) << ' ' << _FLOAT(accel.y, 2) << ' ' << _FLOAT(accel.z, 2) << endl;
+    if (modeRaw)
+        dataStream << PREFIX_RESPONSE << CMD_ACCEL << "r " << imu.GetAccelRaw().x << ' ' << imu.GetAccelRaw().y << ' ' << imu.GetAccelRaw().z << endl;
+    else
+        dataStream << PREFIX_RESPONSE << CMD_ACCEL << ' ' << _FLOAT(acc.x, 2) << ' ' << _FLOAT(acc.y, 2) << ' ' << _FLOAT(acc.z, 2) << endl;
 }
 
 
-void RequestSerialGyro(Stream & dataStream)
+void RequestSerialGyro(Stream& dataStream, bool modeRaw)
 {
-    dataStream << '#' << CMD_GYRO << ' ' << _FLOAT(gyro.x, 2) << ' ' << _FLOAT(gyro.y, 2) << ' ' << _FLOAT(gyro.z, 2) << endl;
+    if (modeRaw)
+        dataStream << PREFIX_RESPONSE << CMD_GYRO << "r " << imu.GetGyroRaw().x << ' ' << imu.GetGyroRaw().y << ' ' << imu.GetGyroRaw().z << endl;
+    else
+        dataStream << PREFIX_RESPONSE << CMD_GYRO << ' ' << _FLOAT(gyro.x, 2) << ' ' << _FLOAT(gyro.y, 2) << ' ' << _FLOAT(gyro.z, 2) << endl;
 }
 
 
-void RequestSerialMag(Stream & dataStream)
+void RequestSerialMag(Stream& dataStream, bool modeRaw)
 {
-    //auto magRaw = imu.GetMagRaw();
-
-    dataStream << '#' << CMD_MAG << ' ' << _FLOAT(mag.x, 2) << ' ' << _FLOAT(mag.y, 2) << ' ' << _FLOAT(mag.z, 2) << endl;
-    //dataStream << '#' << CMD_MAG << ' ' << magRaw.x << ' ' << magRaw.y << ' ' << magRaw.z << endl;
+    if (modeRaw)
+        dataStream << PREFIX_RESPONSE << CMD_MAG << "r " << imu.GetMagRaw().x << ' ' << imu.GetMagRaw().y << ' ' << imu.GetMagRaw().z << endl;
+    else
+        dataStream << PREFIX_RESPONSE << CMD_MAG << ' ' << _FLOAT(mag.x, 2) << ' ' << _FLOAT(mag.y, 2) << ' ' << _FLOAT(mag.z, 2) << endl;
 }
 
 
-void RequestSerialEuler(Stream & dataStream)
+void RequestSerialEuler(Stream& dataStream)
 {
-    dataStream << '#' << CMD_EULER << ' ' << _FLOAT(eulerAngles.Yaw, 2) << ' ' << _FLOAT(eulerAngles.Pitch, 2) << ' ' << _FLOAT(eulerAngles.Roll, 2) << endl;
+    dataStream << PREFIX_RESPONSE << CMD_EULER << ' ' << _FLOAT(eulerAngles.Yaw, 2) << ' ' << _FLOAT(eulerAngles.Pitch, 2) << ' ' << _FLOAT(eulerAngles.Roll, 2) << endl;
 }
 
 
-void RequestSerialHeading(Stream & dataStream)
+void RequestSerialHeading(Stream& dataStream)
 {
-    auto heading = imu.GetCompassHeadingDegrees();
-
-    dataStream << '#' << CMD_HEADING << ' ' << _FLOAT(heading, 2) << endl;
-}
-
-
-void RequestSerialVelocity(Stream & dataStream)
-{
-    dataStream << '#' << CMD_VELOCITY << ' ' << _FLOAT(velocity.x, 2) << ' ' << _FLOAT(velocity.y, 2) << ' ' << _FLOAT(velocity.z, 2) << endl;
-}
-
-
-void RequestSerialGimbal(Stream & dataStream)
-{
-    dataStream << '#' << CMD_GIMBAL << ' ' << _FLOAT(gimbal.x, 2) << ' ' << _FLOAT(gimbal.y, 2) << ' ' << _FLOAT(gimbal.z, 2) << endl;
-}
-
-
-void RequestSerialDynAccel(Stream & dataStream)
-{
-    dataStream << '#' << CMD_DYN_ACCEL << ' ' << _FLOAT(dynAccel.x, 2) << ' ' << _FLOAT(dynAccel.y, 2) << ' ' << _FLOAT(dynAccel.z, 2) << endl;
+    dataStream << PREFIX_RESPONSE << CMD_HEADING << ' ' << _FLOAT(heading, 2) << endl;
 }
 
 

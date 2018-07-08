@@ -9,9 +9,12 @@
 // Subtract the bias values from the raw data reading for each axis
 // before doing anything else with the data values.
 // These were empirically determined using a separate calibration program, and are different for every sensor!
-#define MAG_BIASX -42    // Default to 0 if unknown
-#define MAG_BIASY 254    // Default to 0 if unknown
-#define MAG_BIASZ 136    // Default to 0 if unknown
+//#define MAG_BIASX -42    // Default to 0 if unknown
+//#define MAG_BIASY 254    // Default to 0 if unknown
+//#define MAG_BIASZ 136    // Default to 0 if unknown
+#define MAG_BIASX -109.11  // Default to 0 if unknown
+#define MAG_BIASY  272.19  // Default to 0 if unknown
+#define MAG_BIASZ  136     // Default to 0 if unknown
 
 // Magnetometer scale correction values
 // Multiply the bias-corrected values by this scale factor to even out
@@ -24,7 +27,7 @@
 
 // Correction for difference between magnetic north and true north (degrees)
 // Different for every location on earth (see ngdc.noaa.gov). 
-#define IMU_MAG_CORRECTION  (3.25*PI/180.0)   // Declination at Dallas, TX is 3.25 degrees on 2017-05-01 
+#define IMU_MAG_CORRECTION  3.25   // Declination at Dallas, TX is 3.25 degrees on 2017-05-01 
 //#define IMU_MAG_CORRECTION 13.8  // Declination at Danville, CA is 13.8 degrees (13 degrees 48 minutes and 47 seconds) on 2014-04-04
 
 
@@ -41,11 +44,9 @@ class MPU9250
 
     public: bool TestConnection(Print& stream=NullPrint);
 
-    //public: bool DataReady();
-
     public: int8_t Update();
 
-    public: Vector3I GetAccelRaw() { return accelRaw; };
+    public: Vector3I GetAccelRaw() { return accRaw; };
 
     public: Vector3I GetGyroRaw() { return gyroRaw; };
 
@@ -73,9 +74,13 @@ class MPU9250
 
     public: void GetMagCalibration(float bias[3], float sensitivity[3]);
 
-    public: float GetCompassHeading();
+    public: void SetMagBiasX(int16_t bias) { magBias[0] = bias; };
 
-    public: float GetCompassHeadingDegrees();
+    public: void SetMagBiasY(int16_t bias) { magBias[1] = bias; };
+
+    public: void SetMagBiasZ(int16_t bias) { magBias[2] = bias; };
+
+    public: float UpdateCompassHeading(Vector3F mag, Vector3F acc, float dt);
 
 
     private: void initMPU9250();
@@ -99,9 +104,12 @@ class MPU9250
     private: float   magBias[3] { 0, 0, 0 };    // Magnetometer bias calibration (milliGauss)
     private: float   magSens[3] { 0, 0, 0 };    // Magnetometer sensitivity calibration (milliGauss)
 
-    private: Vector3I accelRaw;
+    private: Vector3I accRaw;
     private: Vector3I gyroRaw;
     private: Vector3I magRaw;
+
+    private: Vector3F lastMag;                  // The smoothed magnetometer reading from the previous iteration
+    private: Vector3F lastAcc;                  // The smoothed accelerometer reading from the previous iteration
 };
 
 #endif

@@ -38,12 +38,12 @@ MPU9250::MPU9250()
     Ascale = AFS_2G;            // Specify acceleromter scale setting
     Gscale = GFS_250DPS;        // Specify gyroscope scale setting
     Mscale = MFS_16BITS;        // Specify magentometer scale setting - Choose either 14-bit or 16-bit resolution
-    Mmode = 0x02;               // 2 for 8 Hz, 6 for 100 Hz continuous magnetometer data read
+    Mmode  = 0x06;              // 2 for 8 Hz, 6 for 100 Hz continuous magnetometer data read
     
     // Set the raw mag bias values. These are empirically determined for each sensor (see note in MPU9250.h)
     magBias[0] = MAG_BIASX; 
     magBias[1] = MAG_BIASY; 
-    magBias[2] = MAG_BIASZ; 
+    magBias[2] = MAG_BIASZ;
 }
 
 
@@ -386,13 +386,6 @@ void MPU9250::Calibrate(Print& stream)
 }
 
 
-//bool MPU9250::DataReady()
-//{
-//    // If interrupt bit goes high, all data registers have new data ready
-//    return readByte(MPU9250_ADDRESS, INT_STATUS) & 0x01;
-//}
-//
-
 int8_t MPU9250::Update()
 {
     uint8_t result = 0;
@@ -405,9 +398,9 @@ int8_t MPU9250::Update()
 
         // Turn the MSB and LSB into a signed 16-bit value
         noInterrupts();
-        accelRaw.x = ((int16_t)rawData[0] << 8) | rawData[1];
-        accelRaw.y = ((int16_t)rawData[2] << 8) | rawData[3];
-        accelRaw.z = ((int16_t)rawData[4] << 8) | rawData[5];
+        accRaw.x = ((int16_t)rawData[0] << 8) | rawData[1];
+        accRaw.y = ((int16_t)rawData[2] << 8) | rawData[3];
+        accRaw.z = ((int16_t)rawData[4] << 8) | rawData[5];
         interrupts();
 
         readBytes(MPU9250_ADDRESS, GYRO_XOUT_H, 6, &rawData[0]);
@@ -450,7 +443,7 @@ Vector3F MPU9250::GetAccel()
 {
     auto aRes = GetAres();  // Acceleration scaling factor
     
-    return Vector3F(accelRaw.x * aRes, accelRaw.y * aRes, accelRaw.z * aRes); // - accelBias[2];
+    return Vector3F(accRaw.x * aRes, accRaw.y * aRes, accRaw.z * aRes); // - accelBias[2];
 }
 
 
@@ -479,11 +472,8 @@ Vector3F MPU9250::GetMag()
     // accelerometer and gyroscope axes by swapping the the magnetometer X and Y axes
     // and negating its z-axis.
     return Vector3F((magRaw.y - magBias[1]) * mRes * magSens[1],      // x value = mag y-axis value
-                      (magRaw.x - magBias[0]) * mRes * magSens[0],      // y value = mag x-axis value
-                     -(magRaw.z - magBias[2]) * mRes * magSens[2]);     // z value = negated mag z-axis value
-    //return ScaledData((magRaw.y - magBias[1]) * mRes,      // x value = mag y-axis value
-    //                  (magRaw.x - magBias[0]) * mRes,      // y value = mag x-axis value
-    //                 -(magRaw.z - magBias[2]) * mRes);     // z value = negated mag z-axis value
+                    (magRaw.x - magBias[0]) * mRes * magSens[0],      // y value = mag x-axis value
+                    (magRaw.z - magBias[2]) * mRes * magSens[2]);     // z value = mag z-axis value
 }
 
 
@@ -510,8 +500,8 @@ float MPU9250::GetMres()
 
     switch (Mscale)
     {
-        // Possible magnetometer scales (and their register bit settings) are:
-        // 14 bit resolution (0) and 16 bit resolution (1)
+    // Possible magnetometer scales (and their register bit settings) are:
+    // 14 bit resolution (0) and 16 bit resolution (1)
     case MFS_14BITS:
         res = 10.*4912. / 8190.; // Proper scale to return milliGauss
         break;
@@ -656,23 +646,11 @@ Vector3F lowPass(Vector3F& newValue, Vector3F& oldValue, float alpha)
 
 
 //******************************************************************************
-// Get tilt-compensated Compass heading
-// Only accurate when device is under little or no acceleration
+// Update tilt-compensated Compass heading
+// Most accurate when device is under little or no acceleration
 //******************************************************************************
-float MPU9250::GetCompassHeading()
-{   
-    // Variables to remember from last iteration
-    static Vector3F lastMag;   // The smoothed magnetometer reading from the previous iteration
-    static Vector3F lastAcc;   // The smoothed accelerometer reading from the previous iteration
-    static uint32_t lastSampleTime;
-
-    // Compute time interval since last measurement (dt) in seconds
-    auto now = micros();
-    auto dt = (now - lastSampleTime) / 1000000.0f;
-
-    // Remember the last measurement time for the next iteration
-    lastSampleTime = now;
-
+float MPU9250::UpdateCompassHeading(Vector3F mag, Vector3F acc, float dt)
+{
     // Compute the low-pass filter coefficient, alpha. The basic formula is:
     // 
     //          alpha = beta * 1/n
@@ -689,16 +667,13 @@ float MPU9250::GetCompassHeading()
     // If this method is called infrequently, dt could exceed 1 second, which may cause
     // alpha to exceed 1. The same could also happen if beta is too large. However, 
     // alpha should always be between 0 and 1. To ensure that, the min() function
-    // is used to ensure that alpha is never greater than 1 (when alpha=1 the 
+    // is used to keep alpha from ever being greater than 1 (when alpha=1 the 
     // low-pass filter is effectively disabled and returns the input value unchanged).
     auto beta = 2.0f;
     auto alpha = min(1.0f, beta*dt);
 
-    // Get the magenetometer and accelerometer readings
-    auto mag = GetMag();
-    auto acc = GetAccel();
-
-    // Run the magnetometer and accelerometer values through a low-pass filter to smooth output
+    // Run the magnetometer and accelerometer values through a low-pass filter to 
+    // smooth output and minimize effect of dynamic accelerations
     // (also remember the smoothed values for the next iteration)
     auto bp = lastMag = lowPass(mag, lastMag, alpha);
     auto gp = lastAcc = lowPass(acc, lastAcc, alpha);
@@ -710,30 +685,24 @@ float MPU9250::GetCompassHeading()
 
     // de-rotate by roll angle
     auto by = bp.y*cr - bp.z*sr;            // Eq 19: y component
-    
+
     bp.z = bp.y*sr + bp.z*cr;               // Bpz = py*sin(roll)+Bpz*cos(roll)
     gp.z = gp.y*sr + gp.z*cr;               // Eq 15 denominator
 
     // calculate current pitch angle
-    auto pitch = atan(-gp.x/gp.z);          // Eq 15
+    auto pitch = atan(-gp.x / gp.z);        // Eq 15
     auto sp = sin(pitch);
     auto cp = cos(pitch);
 
     // de-rotate by pitch angle 
-    auto bx =  bp.x*cp + bp.z*sp;           // Eq 19: x component 
+    auto bx = bp.x*cp + bp.z*sp;            // Eq 19: x component 
     //auto bz = -bp.x*sp + bp.z*cp;           // Eq 19: z component - not really needed
 
     // calculate current yaw angle
-    auto yaw = atan2(-by, bx) + IMU_MAG_CORRECTION;          // Eq 22
+    auto yaw = atan2(-by, bx);          // Eq 22
 
-    // Converts yaw angle to heading angle in range 0-2PI; where 0=North, PI/2=East, PI=South, 3PI/2=West
-    return fmod((TWO_PI - yaw), TWO_PI);
-}
-
-
-float MPU9250::GetCompassHeadingDegrees()
-{
-    return GetCompassHeading() * RAD_TO_DEG;
+    // Converts yaw angle to heading angle in range 0-360; where 0=North, 90=East, 180=South, 270=West
+    return fmod((TWO_PI-yaw)*RAD_TO_DEG + IMU_MAG_CORRECTION, 360);
 }
 
 
