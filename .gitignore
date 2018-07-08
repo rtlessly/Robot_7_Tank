@@ -6,7 +6,7 @@
 # Files created by vMicro Arduino plug-in
 *.vsarduino.h
 *.vmps.xml
-*.vcxproj.filters
+__vm/
 
 # User-specific files
 *.suo
