@@ -3,6 +3,11 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/master/VisualStudio.gitignore
 
+# Files created by vMicro Arduino plug-in
+*.vsarduino.h
+*.vmps.xml
+*.vcxproj.filters
+
 # User-specific files
 *.suo
 *.user

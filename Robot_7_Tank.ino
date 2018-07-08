@@ -202,7 +202,7 @@ bool CheckSideSensors()
         Logger() << F("Both left and right IR sensors triggered.") << endl;
         Stop();
         GoBackward();
-        scheduler.InsertAt(CheckCorneredTask, 2);
+        scheduler.InsertAfter(CheckCorneredTask, CheckRemoteTask);
     }
     else if (left)      // If left sensor triggered then spin right to avoid obstacle
     {
