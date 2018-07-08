@@ -261,7 +261,7 @@ bool CheckSonarSensor()
     auto timeout = millis() + 2000;
 
     // Keep turning until sonar no longer sees the obstacle
-    for (auto ping = sonar.Ping(); ping != PING_FAILED && ping < SONAR_THRESHOLD; ping = sonar.Ping())
+    while (Ping() < SONAR_THRESHOLD)
     {
         if (millis() > timeout) break;
 
