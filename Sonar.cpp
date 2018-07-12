@@ -28,7 +28,7 @@ uint16_t Ping()
 /// A more sophisticated approach might be to do some sort of statistical analysis
 ///to detect outliers, compute the median, etc.
 //******************************************************************************
-SonarScanResults sonarScan()
+SonarScanResults ScanForBetterDirection()
 {
     static const int SCAN_ANGLE = 90;
 
@@ -107,7 +107,7 @@ SonarScanResults sonarScan()
 
     auto direction = (leftSum > rightSum) ? 'L' : 'R';
 
-    TRACE(Logger() << F("sonarScan, direction=") << direction
+    TRACE(Logger() << F("ScanForBetterDirection, direction=") << direction
                    << F(", leftSum") << leftSum << F(", rightSum=") << rightSum
                    << F(", leftMax=") << leftMax << F(", rightMax=") << rightMax
                    << endl);

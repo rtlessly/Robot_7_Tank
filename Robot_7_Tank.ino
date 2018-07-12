@@ -51,7 +51,7 @@ Task CheckSideSensorsTask(CheckSideSensors);
 Task CheckSonarSensorTask(CheckSonarSensor);
 Task CheckCorneredTask(CheckCornered);
 Task GoForwardTask([]() { GoForward(); return false; });
-Task ScanForBetterDirectionTask(ScanForBetterDirection);
+Task AvoidObstacleDetectedBySonarTask(AvoidObstacleDetectedBySonar);
 
 
 //******************************************************************************
@@ -198,35 +198,57 @@ bool CheckCornered()
 }
 
 
+static char   scanDirection = 'R';
+static int8_t scanAngle = 0;
+
 bool CheckSonarSensor()
 {
+    if (!motorsEnabled) return false;
+
     // Check for obstacle ahead
     auto ping = sonar.MultiPing();
 
-    if (ping > SONAR_THRESHOLD) return false;
-        
+    if (ping > SONAR_THRESHOLD)
+    {
+        // Pan the sonar back and forth +/-10 degrees.
+        if (scanDirection == 'R')
+        {
+            if (++scanAngle > 10) scanDirection = 'L';
+        }
+        else
+        {
+            if (--scanAngle < -10) scanDirection = 'R';
+        }
+
+        panServo.write(SERVO_BIAS + scanAngle);
+
+        return false;
+    }
+
     // An obstacle was detected closer than threshold distance
     // Stop when obstacle is detected
     TRACE(Logger() << F("Obstacle detected ahead by sonar") << endl);
     Stop();
+    panServo.write(SERVO_BIAS);
+    scanAngle = 0;
 
-    // Add task to scan for a better direction to move
-    scheduler.InsertAfter(ScanForBetterDirectionTask, CheckRemoteTask);
-    ScanForBetterDirection();
-    return true;
-}
-
-
-bool ScanForBetterDirection()
-{
     // If obstacle is really close then back up a little first
     if (Ping() < SONAR_THRESHOLD / 2)
     {
         GoBackward(500);    // Backup for 1/2 second
     }
 
+    // Add task to scan for a better direction to move
+    scheduler.InsertAfter(AvoidObstacleDetectedBySonarTask, CheckRemoteTask);
+
+    return true;
+}
+
+
+bool AvoidObstacleDetectedBySonar()
+{
     // Try to find a better direction to move
-    auto results = sonarScan();
+    auto results = ScanForBetterDirection();
 
     // Start a spin in the direction indicated by sonar
     Spin(results.BestDirection);
@@ -250,7 +272,7 @@ bool ScanForBetterDirection()
     wdt_reset();
 
     // Remove task as it is no longer needed (for now)
-    scheduler.Remove(ScanForBetterDirectionTask);
+    scheduler.Remove(AvoidObstacleDetectedBySonarTask);
 
     return true;
 }

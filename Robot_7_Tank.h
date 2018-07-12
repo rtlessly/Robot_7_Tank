@@ -36,7 +36,7 @@ bool CheckStepSensor();
 bool CheckSideSensors();
 bool CheckSonarSensor();
 bool CheckCornered();
-bool ScanForBetterDirection();
+bool AvoidObstacleDetectedBySonar();
 
 void Stop();
 void GoForward();
@@ -50,7 +50,7 @@ void Spin180(char direction = 'R');
 void SetMotors(int leftSpeed, int rightSpeed);
 
 uint16_t Ping();
-SonarScanResults sonarScan();
+SonarScanResults ScanForBetterDirection();
 
 void PerformMagCalibration();
 
