@@ -46,10 +46,9 @@ bool motorsEnabled = false;         // Indicates if the motors are enabled
 TaskScheduler scheduler;
 Task CheckRemoteTask(CheckRemoteCommand);
 Task CheckMagCalibrationTask(CheckMagCalibration);
-Task CheckStepSensorTask(CheckStepSensor);
+//Task CheckStepSensorTask(CheckStepSensor);
 Task CheckSideSensorsTask(CheckSideSensors);
 Task CheckSonarSensorTask(CheckSonarSensor);
-Task CheckCorneredTask(CheckCornered);
 Task GoForwardTask([]() { GoForward(); return false; });
 Task AvoidObstacleDetectedBySonarTask(AvoidObstacleDetectedBySonar);
 
@@ -78,13 +77,13 @@ void setup()
     // Setup tasks
     scheduler.Add(CheckRemoteTask);
     scheduler.Add(CheckMagCalibrationTask);
-    //scheduler.Add(CheckStepSensorTask);
+    scheduler.Add(CheckStepSensorTask);
     scheduler.Add(CheckSideSensorsTask);
     scheduler.Add(CheckSonarSensorTask);
     scheduler.Add(GoForwardTask);
 
     // Blink LED to indicate ready
-    BlinkLEDCount(5, 250, 250);
+    BlinkLEDCount(5, 150, 250);
 
     // Setup a 4 second watchdog timer to reset microcontroller if program locks up
     wdt_enable(WDTO_4S);
@@ -104,18 +103,28 @@ void loop()
 // Task methods
 //******************************************************************************
 
+#define REMOTE_DEBOUNCE_TIME 500
+
+// The timeout helps to eliminate rapid, repeated triggers (bounce) caused by pulsed signals from IR Remote
+static uint32_t remoteDebounceTimeout = 0;
+
 bool CheckRemoteCommand()
 {
-    // The timeout helps to eliminate rapid, repeated triggers (bounce) caused by pulsed signals from IR Remote
-    static uint32_t debounceTimeout = 0;
+    auto now = millis();
 
     // Check if the IR Remote Sensor detected a signal
-    if (!ir.Read() || (millis() < debounceTimeout)) return false;
-        
+    if (!ir.Read() || (now < remoteDebounceTimeout))
+    {
+        if (now > (remoteDebounceTimeout - (REMOTE_DEBOUNCE_TIME/2))) digitalWrite(LED_PIN, LOW);
+
+        return false;
+    }
+
     TRACE(Logger() << F("Recieved IR Remote signal") << endl);
+    digitalWrite(LED_PIN, HIGH);
     Stop();     // If motors are running this ensures they are stopped before being disabled, otherwise it does nothing
     motorsEnabled = !motorsEnabled;
-    debounceTimeout = millis() + 500;
+    remoteDebounceTimeout = millis() + REMOTE_DEBOUNCE_TIME;
 
     return true;
 }
@@ -141,11 +150,11 @@ bool CheckStepSensor()
     if (!stepDetected || !motorsEnabled) return false;
 
     // If step sensor is triggered then stop and back up
-    Logger() << F("Step sensor triggered") << endl;
+    TRACE(Logger() << F("Step sensor triggered") << endl);
     Stop();
     GoBackward();
 
-    while (!proxStep.Read());   // Backup until step sensor turns off
+    while (!proxStep.Read());   // Backup until step sensor turns on again
 
     GoBackward(500);            // Then back up a little more
     Spin180();                  // And then turn around
@@ -163,36 +172,25 @@ bool CheckSideSensors()
     // If both sensors triggered then we may be in a corner or tight space
     if (left && right)
     {
-        Logger() << F("Both left and right IR sensors triggered.") << endl;
+        TRACE(Logger() << F("Both left and right IR sensors triggered.") << endl);
         Stop();
-        GoBackward();
-        scheduler.InsertAfter(CheckCorneredTask, CheckRemoteTask);
+        GoBackward(500);    // Backup for 1/2 second
+        Spin180();          // Then turn around
     }
-    else if (left)      // If left sensor triggered then spin right to avoid obstacle
+    else if (left)          // If left sensor triggered then spin right to avoid obstacle
     {
-        Logger() << F("Left IR sensor triggered.") << endl;
+        TRACE(Logger() << F("Left IR sensor triggered.") << endl);
         Spin('R');
     }
-    else if (right)     // If right sensor triggered then spin left to avoid obstacle
+    else if (right)         // If right sensor triggered then spin left to avoid obstacle
     {
-        Logger() << F("Right IR sensor triggered.") << endl;
+        TRACE(Logger() << F("Right IR sensor triggered.") << endl);
         Spin('L');
     }
-    else                // Neither sensor triggered
+    else                    // Neither sensor triggered
     {
         return false;
     }
-
-    return true;
-}
-
-
-bool CheckCornered()
-{
-    Logger() << F("Backing out of corner.") << endl;
-    GoBackward(500);                // Backup for 1/2 second more
-    Spin180('R');                   // Then turn around
-    scheduler.Remove(CheckCorneredTask);
 
     return true;
 }
@@ -250,26 +248,36 @@ bool AvoidObstacleDetectedBySonar()
     // Try to find a better direction to move
     auto results = ScanForBetterDirection();
 
-    // Start a spin in the direction indicated by sonar
-    Spin(results.BestDirection);
-
-    auto timeout = millis() + 4000;
-
-    // Keep turning until sonar no longer sees the obstacle (or timeout)
-    while (Ping() < SONAR_THRESHOLD)
+    if (results.RightMax < SONAR_THRESHOLD && results.LeftMax < SONAR_THRESHOLD)
     {
-        if (millis() > timeout) break;
+        // We are stuck in a tight space. Best to backup, turn around, and get out.
+        TRACE(Logger() << F("Backing out of space.") << endl);
+        GoBackward(500);                // Backup for 1/2 second more
+        Spin180(results.BestDirection); // Then turn around
+    }
+    else
+    {
+        // Start a spin in the direction indicated by sonar
+        Spin(results.BestDirection);
 
-        delay(50);
+        auto timeout = millis() + 4000;
+
+        // Keep turning until sonar no longer sees the obstacle (or timeout)
+        while (Ping() < SONAR_THRESHOLD)
+        {
+            if (millis() > timeout) break;
+
+            delay(50);
+            wdt_reset();
+        }
+
+        // The obstacle is no longer detected, but it still may not be completely
+        // clear of the robot. So continue turning a little longer to hopefully 
+        // completely clear it. The time delay depends on the speed of the robot.
+        delay(400);
+        Stop();
         wdt_reset();
     }
-
-    // The obstacle is no longer detected, but it still may not be completely
-    // clear of the robot. So continue turning a little longer to hopefully 
-    // completely clear it. The time delay depends on the speed of the robot.
-    delay(400);
-    Stop();
-    wdt_reset();
 
     // Remove task as it is no longer needed (for now)
     scheduler.Remove(AvoidObstacleDetectedBySonarTask);

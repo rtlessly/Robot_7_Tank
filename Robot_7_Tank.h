@@ -35,7 +35,6 @@ bool CheckRemoteCommand();
 bool CheckStepSensor();
 bool CheckSideSensors();
 bool CheckSonarSensor();
-bool CheckCornered();
 bool AvoidObstacleDetectedBySonar();
 
 void Stop();

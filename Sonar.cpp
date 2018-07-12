@@ -37,22 +37,16 @@ SonarScanResults ScanForBetterDirection()
     uint16_t leftMax = 0;
     uint16_t rightSum = 0;
     uint16_t rightMax = 0;
-    //uint16_t leftscan[SCAN_ANGLE];
-    //uint16_t rightscan[SCAN_ANGLE];
 
     panServo.write(SERVO_BIAS);  // Start sonar at center position looking straight ahead
     delay(100);                  // Wait 100ms for servo to reach start position
     wdt_reset();
-
-    //ZERO_ARRAY(leftscan);
-    //ZERO_ARRAY(rightscan);
 
     // Scan distances from center to max right angle (right side cw)
     for (auto i = 1; i <= SCAN_ANGLE; i++)
     {
         panServo.write(SERVO_BIAS - i);
         delay(2);				// Delay 2ms for servo to move to next position
-        //rightscan[i - 1] += Ping();
         ping = Ping();
         rightSum += ping;
         rightMax = max(rightMax, ping);
@@ -64,7 +58,6 @@ SonarScanResults ScanForBetterDirection()
     {
         panServo.write(SERVO_BIAS - i);
         delay(2);				// Delay 2ms for servo to move to next position
-        //rightscan[i - 1] += Ping();
         ping = Ping();
         rightSum += ping;
         rightMax = max(rightMax, ping);
@@ -76,7 +69,6 @@ SonarScanResults ScanForBetterDirection()
     {
         panServo.write(SERVO_BIAS + i);
         delay(2);				// Delay 2ms for servo to move to next position
-        //leftscan[i - 1] += Ping();
         ping = Ping();
         leftSum += ping;
         leftMax = max(leftMax, ping);
@@ -88,7 +80,6 @@ SonarScanResults ScanForBetterDirection()
     {
         panServo.write(SERVO_BIAS + i);
         delay(2);				// Delay 2ms for servo to move to next position
-        //leftscan[i - 1] += Ping();
         ping = Ping();
         leftSum += ping;
         leftMax = max(leftMax, ping);
@@ -98,12 +89,6 @@ SonarScanResults ScanForBetterDirection()
     // All done scanning. At this point note that both sides have been scanned twice.
     // Recenter servo to point straight ahead again
     panServo.write(SERVO_BIAS);
-
-    //for (auto i = 0; i < SCAN_ANGLE; i++)
-    //{
-    //    left += leftscan[i];
-    //    right += rightscan[i];
-    //}
 
     auto direction = (leftSum > rightSum) ? 'L' : 'R';
 
