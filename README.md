@@ -13,6 +13,9 @@ Robot on "tank" chassis with ultrasonic and IR object avoidance, IR step sensor,
 
  ![Photo 1 of robot](Robot_7_Tank_20180712_1.jpg?raw=true)
  
+ The following images are sideways / upside-down -- Not sure why yet. 
+ The originals are oriented correctly on my PC.
+ 
  ![Photo 2 of robot](Robot_7_Tank_20180712_2.jpg?raw=true)
  
  ![Photo 3 of robot](Robot_7_Tank_20180712_3.jpg?raw=true)
