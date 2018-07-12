@@ -11,7 +11,7 @@ Robot on "tank" chassis with ultrasonic and IR object avoidance, IR step sensor,
  * IMU used to measure robot orientation and measure turn angles
  * Simple IR sensor to turn motors on/off via IR remote
 
- ![Photo 1 of robot](https://github.com/rtlessly/Robot_7_Tank/blob/master/Robot_7_Tank_20180712_1.jpg)
+ ![Photo 1 of robot](Robot_7_Tank_20180712_1.jpg?raw=true)
  
  ![Photo 2 of robot](https://github.com/rtlessly/Robot_7_Tank/blob/master/Robot_7_Tank_20180712_2.jpg)
  
