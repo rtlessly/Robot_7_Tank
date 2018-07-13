@@ -77,9 +77,9 @@ void Spin(char direction, uint32_t duration)
 
 void Spin180(char direction)
 {
-    TRACE(Logger() << F("Spin180(") << direction << ')' << endl);
+    TRACE(Logger(F("Spin180")) << '(' << direction << ')' << endl);
     Spin(direction == 'L' ? -180 : 180);
-    TRACE(Logger() << F("Spin180: turn complete") << endl);
+    TRACE(Logger(F("Spin180")) << F("turn complete") << endl);
 }
 
 
@@ -130,21 +130,22 @@ void Spin180(char direction)
 //******************************************************************************
 void Spin(int16_t angle)
 {
-    TRACE(Logger() << F("Spin(") << angle << ')' << endl);
+    TRACE(Logger(F("Spin")) << '(' << angle << ')' << endl);
 
     if (angle == 0) return;
-
-    float targetAngle = abs(angle)*DEG_TO_RAD;  // Target angle
-    auto currAngle = 0.0f;                      // How much we have turned so far
-    auto w0 = 0.0f;                             // Initial turn rate
+    
+    imu.GetGyro();                              // Initial turn rate
 
     // Start spin in requested direction
     if (angle < 0)
-        Spin('L');
-    else
         Spin('R');
+    else
+        Spin('L');
 
+    float targetAngle = abs(angle)*DEG_TO_RAD;  // Target angle
+    auto currAngle = 0.0f;                      // How much we have turned so far
     auto t0 = micros();                         // Time of last measurement
+    auto w0 = imu.GetGyro().z;
 
     // Use absolute value of current angle since we are only measuring the magnitude 
     // of the turn and not the direction
@@ -163,15 +164,15 @@ void Spin(int16_t angle)
         // Update turn angle using trapezoidal integration
         currAngle += (w0 + (w1 - w0) / 2.0) * dt;
 
+        TRACE(Logger(F("Spin")) << _FLOAT(dt, 6) << ',' << _FLOAT(w0, 3) << ',' << _FLOAT(w1, 3) << ',' << _FLOAT(currAngle, 3) << endl);
+
         // Update starting values for next iteration
         w0 = w1;
         t0 = t1;
-
-        TRACE(Logger() << F("Spin, ") << dt << _FLOAT(w0, 2) << ',' << _FLOAT(w1, 2) << ',' << _FLOAT(currAngle, 2) << endl);
     }
 
     Stop();
-    TRACE(Logger() << F("Spin: spin complete") << endl);
+    TRACE(Logger(F("Spin")) << F("Complete") << endl);
 }
 
 

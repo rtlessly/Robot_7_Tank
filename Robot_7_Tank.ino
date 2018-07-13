@@ -46,7 +46,7 @@ bool motorsEnabled = false;         // Indicates if the motors are enabled
 TaskScheduler scheduler;
 Task CheckRemoteTask(CheckRemoteCommand);
 Task CheckMagCalibrationTask(CheckMagCalibration);
-//Task CheckStepSensorTask(CheckStepSensor);
+ Task CheckStepSensorTask(CheckStepSensor);
 Task CheckSideSensorsTask(CheckSideSensors);
 Task CheckSonarSensorTask(CheckSonarSensor);
 Task GoForwardTask([]() { GoForward(); return false; });
