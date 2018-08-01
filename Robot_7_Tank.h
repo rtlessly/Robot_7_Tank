@@ -33,9 +33,10 @@ struct SonarScanResults
 //******************************************************************************
 bool CheckRemoteCommand();
 bool CheckStepSensor();
+bool CheckFrontSensor();
 bool CheckSideSensors();
 bool CheckSonarSensor();
-bool AvoidObstacleDetectedBySonar();
+bool ScanForNewDirection();
 
 void Stop();
 void GoForward();
@@ -50,6 +51,7 @@ void SetMotors(int leftSpeed, int rightSpeed);
 
 uint16_t Ping();
 SonarScanResults ScanForBetterDirection();
+void PanSonar(int angle);
 
 void PerformMagCalibration();
 
@@ -62,7 +64,6 @@ void IndicateFailure(const __FlashStringHelper* msg = nullptr);
 //******************************************************************************
 const int LED_PIN = 13;             // Hardware LED pin
 const int SERVO_PIN = 9;            // Servo on Arduino pin 9
-const int SERVO_BIAS = 112;         // Set servo center position bias to compensate for the servo orientation
 const int MAX_SPEED = 255;          // Maximum motor speed
 const int CRUISE_SPEED = 180;       // Normal speed to run the motors
 const int SONAR_THRESHOLD = 40;     // Sonar threshold distance in centimeters
@@ -82,6 +83,7 @@ extern bool motorsEnabled;          // Indicates if the motors are enabled
 //******************************************************************************
 extern Servo panServo;              // Sewrvo for panning the ultrasonic sensor left and right
 extern SonarSensor sonar;           // Ultrasonic sensor on Arduino
+extern IRProximitySensor proxFront; // Front IR Proximity sensor (for obstacle detection ahead)
 extern IRProximitySensor proxRight; // Right IR Proximity sensor (for obstacle detection on the right side)
 extern IRProximitySensor proxLeft;  // Left IR Proximity sensor (for obstacle detection on the left side)
 extern IRProximitySensor proxStep;  // Step IR Proximity sensor  (for step, i.e. drop-off, detection)
@@ -96,9 +98,9 @@ extern TaskScheduler scheduler;
 extern Task CheckRemoteTask;
 extern Task CheckMagCalibrationTask;
 extern Task CheckStepSensorTask;
+extern Task CheckFrontSensorTask;
 extern Task CheckSideSensorsTask;
 extern Task CheckSonarSensorTask;
-extern Task CheckCorneredTask;
 extern Task GoForwardTask;
 #endif
 

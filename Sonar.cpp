@@ -4,6 +4,25 @@
 #include "Robot_7_Tank.h"
 
 
+// Sonar pan servo center position bias. This is the value you have to send to
+// the servo to set it to the centered position. Ideally, this should be 90 since
+// the Arduino servo library takes angle values from 0 to 180 degrees. However,
+// this value may need to be tweaked slightly depending on the physical characteristics
+// of the servo motor and how accurately the ultrasonic sensor can be mounted and
+// aligned to the true center position of the servo shaft. 
+const int SERVO_BIAS = 93;
+
+
+//******************************************************************************
+// Pan the sonar servo to the desired angle. The angle should be in the range
+// +/-90 degrees, with 0 degrees being the centered position.
+//******************************************************************************
+void PanSonar(int angle)
+{
+    panServo.write(SERVO_BIAS + angle);
+}
+
+
 //******************************************************************************
 // Do one ultrasonic sensor ping.
 //******************************************************************************
@@ -38,15 +57,15 @@ SonarScanResults ScanForBetterDirection()
     uint16_t rightSum = 0;
     uint16_t rightMax = 0;
 
-    panServo.write(SERVO_BIAS);  // Start sonar at center position looking straight ahead
-    delay(100);                  // Wait 100ms for servo to reach start position
+    PanSonar(0);                // Start sonar at center position looking straight ahead
+    delay(100);                 // Wait 100ms for servo to reach start position
     wdt_reset();
 
     // Scan distances from center to max right angle (right side cw)
-    for (auto i = 1; i <= SCAN_ANGLE; i++)
+    for (auto angle = 1; angle <= SCAN_ANGLE; angle++)
     {
-        panServo.write(SERVO_BIAS - i);
-        delay(2);				// Delay 2ms for servo to move to next position
+        PanSonar(-angle);
+        delay(2);               // Delay 2ms for servo to move to next position
         ping = Ping();
         rightSum += ping;
         rightMax = max(rightMax, ping);
@@ -54,9 +73,9 @@ SonarScanResults ScanForBetterDirection()
     }
 
     // Scan distances from max right angle to center (right side ccw)
-    for (auto i = SCAN_ANGLE; i >= 1; i--)
+    for (auto angle = SCAN_ANGLE; angle >= 1; angle--)
     {
-        panServo.write(SERVO_BIAS - i);
+        PanSonar(-angle);
         delay(2);				// Delay 2ms for servo to move to next position
         ping = Ping();
         rightSum += ping;
@@ -65,9 +84,9 @@ SonarScanResults ScanForBetterDirection()
     }
 
     // Scan distances from center to max left (left side ccw)
-    for (auto i = 1; i <= SCAN_ANGLE; i++)
+    for (auto angle = 1; angle <= SCAN_ANGLE; angle++)
     {
-        panServo.write(SERVO_BIAS + i);
+        PanSonar(angle);
         delay(2);				// Delay 2ms for servo to move to next position
         ping = Ping();
         leftSum += ping;
@@ -76,9 +95,9 @@ SonarScanResults ScanForBetterDirection()
     }
 
     // Scan the distance from max left angle to center (left side cw)
-    for (auto i = SCAN_ANGLE; i >= 1; i--)
+    for (auto angle = SCAN_ANGLE; angle >= 1; angle--)
     {
-        panServo.write(SERVO_BIAS + i);
+        PanSonar(angle);
         delay(2);				// Delay 2ms for servo to move to next position
         ping = Ping();
         leftSum += ping;
@@ -88,7 +107,7 @@ SonarScanResults ScanForBetterDirection()
 
     // All done scanning. At this point note that both sides have been scanned twice.
     // Recenter servo to point straight ahead again
-    panServo.write(SERVO_BIAS);
+    PanSonar(0);
 
     auto direction = (leftSum > rightSum) ? 'L' : 'R';
 

@@ -10,6 +10,7 @@ License : TBD
 
 #include <RTL_Math.h>
 
+
 // I2C Address that the IMU responds to
 #define RAZOR_IMU_ADDRESS ((byte)0x40)
 
@@ -18,6 +19,18 @@ License : TBD
 
 // Standard 1-G acceleration value in meters per second^2
 const float ONE_G = 9.80665;
+
+
+struct EulerAngles
+{
+    float Yaw;
+    float Pitch;
+    float Roll;
+
+    EulerAngles() : Yaw(0), Pitch(0), Roll(0) {}
+    EulerAngles(float yaw, float pitch, float roll) : Yaw(yaw), Pitch(pitch), Roll(roll) {}
+};
+
 
 /*******************************************************************************
 Command Codes for IMU
@@ -32,6 +45,7 @@ operation.The command codes are:
 - M : Return raw 3-axis magnetometer sensor data (as Vector3I)
 - E : Return Euler angles as yaw, pitch, roll in degrees
 - h : Returns the compass heading in degrees (0 = North, 90 = East, 180 = South, 270 = West)
+- v : Returns the integrated velocity vector in m/s
 - I : Returns the device ID(0x50)
 - r : Returns the ready status of the IMU; 1 = ready, 0 = not ready
 - c : Turns continuous mode on / off; must be followed by '1' (on) or '0' (off).
@@ -51,28 +65,30 @@ Note: Continuous mode is not available via the I2C interface, it only works via
       the serial port.
 *******************************************************************************/
 
-const byte PREFIX_RESPONSE = '#';
-const byte PREFIX_ERR = '!';
-const byte PREFIX_CMD = '.';
+const char PREFIX_RESPONSE = '#';
+const char PREFIX_ERR = '!';
+const char PREFIX_CMD = '.';
 
-const byte CMD_IS_READY = 'r';
-const byte CMD_ID = 'I';
-const byte CMD_ACCEL = 'a';
-const byte CMD_ACCEL_RAW = 'A';
-const byte CMD_GYRO = 'g';
-const byte CMD_GYRO_RAW = 'G';
-const byte CMD_MAG = 'm';
-const byte CMD_MAG_RAW = 'M';
-const byte CMD_EULER = 'E';
-const byte CMD_HEADING = 'h';
-const byte CMD_CONTINUOS = 'c';
-const byte CMD_ZERO = 'z';
-const byte CMD_SETTING = 's';
+const char CMD_IS_READY = 'r';
+const char CMD_ID = 'I';
+const char CMD_ACCEL = 'a';
+const char CMD_ACCEL_RAW = 'A';
+const char CMD_GYRO = 'g';
+const char CMD_GYRO_RAW = 'G';
+const char CMD_MAG = 'm';
+const char CMD_MAG_RAW = 'M';
+const char CMD_EULER = 'E';
+const char CMD_HEADING = 'h';
+const char CMD_VELOCITY = 'v';
 
-const byte SETTING_MAG_BIAS = 'm';
-const byte SETTING_X = 'x';
-const byte SETTING_Y = 'y';
-const byte SETTING_Z = 'z';
+const char CMD_CONTINUOS = 'c';
+const char CMD_ZERO = 'z';
+const char CMD_SETTING = 's';
+
+const char SETTING_MAG_BIAS = 'm';
+const char SETTING_X = 'x';
+const char SETTING_Y = 'y';
+const char SETTING_Z = 'z';
 
 const byte REG_CONTROL = 0x01;
 const byte REG_CONTROL_LEN = sizeof(byte);
@@ -107,16 +123,10 @@ const byte REG_MAGBIAS_Y_LEN = sizeof(int16_t);
 const byte REG_MAGBIAS_Z = REG_MAGBIAS_Y + REG_MAGBIAS_Y_LEN;
 const byte REG_MAGBIAS_Z_LEN = sizeof(int16_t);
 
+const byte REG_VELOCITY = REG_MAGBIAS_Z + REG_MAGBIAS_Z_LEN;
+const byte REG_VELOCITY_LEN = sizeof(float)*3;
+
 const char ERR_BAD_CMD_STRING = 0x81;
 const char ERR_CMD_UNRECOGNIZED = 0x82;
-
-
-struct EulerAngles
-{
-    float Yaw{ 0 };
-    float Pitch{ 0 };
-    float Roll{ 0 };
-};
-
 
 #endif

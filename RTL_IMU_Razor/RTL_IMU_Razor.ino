@@ -69,7 +69,7 @@ the slave I2C port (see explanation below).
 #include <wiring_private.h> // To get pinPeripheral() function
 #include <Wire.h>
 #include <RTL_Stdlib.h>
-#include <EventFramework.h>
+#include <RTL_EventFramework.h>
 #include "RTL_IMU.h"
 #include "MPU9250.h"
 
@@ -95,14 +95,14 @@ void RequestSerialGyro(Stream& dataStream, bool modeRaw = false);
 void RequestSerialMag(Stream& dataStream, bool modeRaw = false);
 void RequestSerialEuler(Stream& dataStream);
 void RequestSerialHeading(Stream& dataStream);
+void RequestSerialVelocity(Stream& dataStream);
 void BlinkLEDCount(uint16_t count, uint16_t onTime = 100, uint16_t offTime = 100);
 void IndicateFailure();
 
 
-
 // Pin definitions
-int intPin =  4;            // Interrupt pin, 2 and 3 are the Arduino's ext int pins, SAMD uses pin 4
-int HW_LED_PIN = 13;        // Set up pin 13 led for toggling
+int intPin =  4;                // Interrupt pin, 2 and 3 are the Arduino's ext int pins, SAMD uses pin 4
+int HW_LED_PIN = LED_BUILTIN;   // Set up pin 13 led for toggling
 
 // Slave I2C connection on SERCOM0 (A3=SDA, A4=SCL)
 TwoWire  slaveI2C = TwoWire(&sercom0, A3, A4);
@@ -111,17 +111,14 @@ TwoWire  slaveI2C = TwoWire(&sercom0, A3, A4);
 MPU9250 imu;
 
 // IMU sensor data values
-Vector3F acc;             // Scaled accelerometer vector (g)
-Vector3F gyro;              // Scaled gyro rates (radians/sec)
-Vector3F mag;               // Scaled magnetometer vector (milliGaus)
-Vector3F dynAccel;          // Dynamic acceleration (gravity component removed)
-Vector3F velocity;          // Integrated velocity vector (m/s)
-Vector3F gimbal;            // Integrated gimbal angles (degrees)
-float    heading;           // Compass heading
+Vector3F acc0;                  // The accelerometer reading from the previous iteration
+Vector3F velocity;              // Integrated velocity vector (m/s)
+EulerAngles eulerAngles;        // Euler angles (yaw, pitch, roll)
+float heading;                  // Compass heading
 
 // Housekeeping variables
-uint32_t lastUpdate = 0;    // Time of previous iteration - used to calculate integration interval
-bool ready = false;         // true=the AHRS is ready to work, false=still initializing
+bool ready = false;             // true=the AHRS is ready to work, false=still initializing
+uint32_t lastUpdateTime = 0;    // Time of previous iteration (for calculating integration interval, dt)
 
 // Indicates which values should be output in continuous mode
 bool modeContinuous = false;
@@ -130,6 +127,9 @@ bool gyroContinuous = false;
 bool magContinuous = false;
 bool eulerContinuous = false;
 bool headingContinuous = false;
+bool velocityContinuous = false;
+
+// Indicates if outputting raw or scaled values
 bool accelRaw = false;
 bool gyroRaw = false;
 bool magRaw = false;
@@ -205,7 +205,7 @@ void setup()
     digitalWrite(intPin, LOW);
 
     // Verify connectivity with MPU-9250
-    ConsoleStream << "RTL_IMU_Razor: Test MPU-9250 connectivity..." << endl;
+    ConsoleStream << "RTL_IMU_Razor: Test MPU-9250 connectivity... ";
 
     if (!imu.TestConnection(ConsoleStream))
     {
@@ -215,36 +215,40 @@ void setup()
         while (true) IndicateFailure();
     }
 
+    ConsoleStream << "Confirmed." << endl;
+
     // Results of gyro and accelerometer self test
     float selfTestResults[6];
-
-    // Perform self-test, self-calibration, and initialization of MPU-9250
-    ConsoleStream << "RTL_IMU_Razor: Performing self test..." << endl;
-    imu.SelfTest(selfTestResults);
-    ConsoleStream << "RTL_IMU_Razor: Performing calibration..." << endl;
-    imu.Calibrate(ConsoleStream);
-    ConsoleStream << "RTL_IMU_Razor: Starting IMU..." << endl;
-    imu.Begin(ConsoleStream);
-
-    ConsoleStream << endl;
-    ConsoleStream << "MPU-9250 self-test results:" << endl;
-    ConsoleStream << "    Accelerometer X-axis trim within " << _FLOAT(selfTestResults[0],1) << "% of factory value" << endl;
-    ConsoleStream << "    Accelerometer Y-axis trim within " << _FLOAT(selfTestResults[1],1) << "% of factory value" << endl;
-    ConsoleStream << "    Accelerometer Z-axis trim within " << _FLOAT(selfTestResults[2],1) << "% of factory value" << endl;
-    ConsoleStream << "    Gyroscope X-axis trim within "     << _FLOAT(selfTestResults[3],1) << "% of factory value" << endl;
-    ConsoleStream << "    Gyroscope Y-axis trim within "     << _FLOAT(selfTestResults[4],1) << "% of factory value" << endl;
-    ConsoleStream << "    Gyroscope Z-axis trim within "     << _FLOAT(selfTestResults[5],1) << "% of factory value" << endl;
-
     float magBias[3];
     float magSens[3];
 
-    imu.GetMagCalibration(magBias, magSens);
+    // Perform self-test, self-calibration, and initialization of MPU-9250
+    ConsoleStream << endl;
+    ConsoleStream << "RTL_IMU_Razor: Performing MPU-9250 self test..." << endl;
+    imu.SelfTest(selfTestResults);
+
+    ConsoleStream << "MPU-9250 self-test results:" << endl;
+    ConsoleStream << "\tAccelerometer X-axis trim within " << _FLOAT(selfTestResults[0],1) << "% of factory value" << endl;
+    ConsoleStream << "\tAccelerometer Y-axis trim within " << _FLOAT(selfTestResults[1],1) << "% of factory value" << endl;
+    ConsoleStream << "\tAccelerometer Z-axis trim within " << _FLOAT(selfTestResults[2],1) << "% of factory value" << endl;
+    ConsoleStream << "\tGyroscope X-axis trim within "     << _FLOAT(selfTestResults[3],1) << "% of factory value" << endl;
+    ConsoleStream << "\tGyroscope Y-axis trim within "     << _FLOAT(selfTestResults[4],1) << "% of factory value" << endl;
+    ConsoleStream << "\tGyroscope Z-axis trim within "     << _FLOAT(selfTestResults[5],1) << "% of factory value" << endl;
 
     ConsoleStream << endl;
+    ConsoleStream << "RTL_IMU_Razor: Performing calibration..." << endl;
+    imu.Calibrate(ConsoleStream);
+    imu.CalibrateFine(ConsoleStream);
+    imu.GetMagCalibration(magBias, magSens);
+
     ConsoleStream << "Magnetometer calibration values: " << endl;
-    ConsoleStream << "    X-Axis sensitivity adjustment value " << _FLOAT(magSens[0], 2) << endl;
-    ConsoleStream << "    Y-Axis sensitivity adjustment value " << _FLOAT(magSens[1], 2) << endl;
-    ConsoleStream << "    Z-Axis sensitivity adjustment value " << _FLOAT(magSens[2], 2) << endl;
+    ConsoleStream << "\tX-Axis sensitivity adjustment value " << _FLOAT(magSens[0], 2) << endl;
+    ConsoleStream << "\tY-Axis sensitivity adjustment value " << _FLOAT(magSens[1], 2) << endl;
+    ConsoleStream << "\tZ-Axis sensitivity adjustment value " << _FLOAT(magSens[2], 2) << endl;
+
+    ConsoleStream << endl;
+    ConsoleStream << "RTL_IMU_Razor: Starting IMU..." << endl;
+    imu.Begin(ConsoleStream);
 
     ConsoleStream << endl;
     ConsoleStream << "MPU-9250 is online..." << endl;
@@ -252,47 +256,49 @@ void setup()
 }
 
 
+auto frameRate = 0.0f;
+auto frameCount = 0;
+auto frameStartTime = micros();
+
+
 void loop()
 {
-    // Remember gyro state vector from previous iteration
-    auto prevGyro = gyro;
-
     // Ask the IMU to update its state vectors
     imu.Update();
 
     // Get new scaled state vectors
-    acc = imu.GetAccel();
-    gyro = imu.GetGyro();
-    mag = imu.GetMag();
+    auto accl = imu.GetAccel();
+    auto gyro = imu.GetGyro();
+    auto mag = imu.GetMag();
 
-    // set integration time by time elapsed since last update
+    // Set time elapsed since last update
     auto now = micros();
-    auto deltaT = (now - lastUpdate) / 1000000.0f;
-
-    lastUpdate = now;
+    auto deltaT = (now - lastUpdateTime) / 1000000.0f;
 
     //MadgwickQuaternionUpdate(accel.x, accel.y, accel.z, gyro.x*PI/180.0f, gyro.y*PI/180.0f, gyro.z*PI/180.0f, mag.y, mag.x, -mag.z, deltaT);
-    //MahonyQuaternionUpdate(accel.x, accel.y, accel.z, gyro.x*PI/180.0f, gyro.y*PI/180.0f, gyro.z*PI/180.0f, mag.x, mag.y, mag.z, deltaT);
+    MahonyQuaternionUpdate(accl, gyro, mag, deltaT);
 
-    // NOTE: The Mahony filter returns an updated gyro rate vector to correct for gyro drift
-    gyro = MahonyQuaternionUpdate(acc, gyro, mag, deltaT);
-    heading = imu.UpdateCompassHeading(mag, acc, deltaT);
-    UpdateEulerAngles();
+    auto newEulerAngles = UpdateEulerAngles();
+    auto acc1 = accl;
+    auto dv = (acc1 + acc0) * (0.5f * ONE_G * deltaT);  // Integrate velocity delta-v
 
-    //// Integrate velocity
-    //auto a = imu.GetDynamicAccel();
-    //auto f = 0.5f * ONE_G * deltaT;
+    noInterrupts();
+    eulerAngles = newEulerAngles;
+    heading = imu.GetHeading();
+    velocity += dv;
+    interrupts();
 
-    //velocity.x += (a.x + dynAccel.x) * f;
-    //velocity.y += (a.y + dynAccel.y) * f;
-    //velocity.z += (a.z + dynAccel.z) * f;
-    //dynAccel = a;
+    acc0 = acc1;
+    lastUpdateTime = now;
+    frameCount++;
 
-    //// Integrate gyro rates to update gimbal angles in degrees
-    //f = 0.5 * (180.0 / PI) * deltaT;
-    //gimbal.x += (gyro.x + prevGyro.x) * f;
-    //gimbal.y += (gyro.y + prevGyro.y) * f;
-    //gimbal.z += (gyro.z + prevGyro.z) * f;
+    if ((now - frameStartTime) > 1000000ul)
+    {
+        frameRate = frameCount / ((now - frameStartTime) / 1000000.0);
+        //Logger() << "Frame rate=" << frameRate << endl;
+        frameCount = 0;
+        frameStartTime = now;
+    }
 
     // Check for and process incoming serial requests
     if (DataStream.available())
@@ -312,6 +318,8 @@ void loop()
         if (eulerContinuous) RequestSerialEuler(DataStream);
 
         if (headingContinuous) RequestSerialHeading(DataStream);
+
+        if (velocityContinuous) RequestSerialVelocity(DataStream);
 
         // Toggle LED to indicate continuous mode active
         digitalWrite(HW_LED_PIN, !digitalRead(HW_LED_PIN));
@@ -337,29 +345,40 @@ static void ReceiveI2C(int messageLength)
 
     switch (commandBuffer[0])
     {
-    case REG_MAGBIAS_X:
-    {
-        auto data = *(int16_t*)&commandBuffer[1];
+        case REG_MAGBIAS_X:
+        {
+            auto data = *(int16_t*)&commandBuffer[1];
 
-        imu.SetMagBiasX(data);
-    }
-    break;
+            imu.SetMagBiasX(data);
+        }
+        break;
 
-    case REG_MAGBIAS_Y:
-    {
-        auto data = *(int16_t*)&commandBuffer[1];
+        case REG_MAGBIAS_Y:
+        {
+            auto data = *(int16_t*)&commandBuffer[1];
 
-        imu.SetMagBiasY(data);
-    }
-    break;
+            imu.SetMagBiasY(data);
+        }
+        break;
 
-    case REG_MAGBIAS_Z:
-    {
-        auto data = *(int16_t*)&commandBuffer[1];
+        case REG_MAGBIAS_Z:
+        {
+            auto data = *(int16_t*)&commandBuffer[1];
 
-        imu.SetMagBiasZ(data);
-    }
-    break;
+            imu.SetMagBiasZ(data);
+        }
+        break;
+
+        case REG_CONTROL:
+        {
+            auto data = *(int16_t*)&commandBuffer[1];
+
+            if (data == CMD_ZERO)
+            {
+                velocity.x = velocity.y = velocity.z = 0.0;
+            }
+        }
+        break;
     }
 }
 
@@ -373,23 +392,35 @@ static void RequestI2C()
     {
         case REG_ID:
             slaveI2C.write(RAZOR_IMU_ID);
-            break;
+        break;
 
         case REG_IS_READY:
             slaveI2C.write(ready ? 1 : 0);
-            break;
+        break;
 
         case REG_ACCEL:
-            slaveI2C.write((uint8_t*)&acc, sizeof(acc));
-            break;
+        {
+            auto data = imu.GetAccel();
+
+            slaveI2C.write((uint8_t*)&data, sizeof(data));
+        }
+        break;
 
         case REG_GYRO:
-            slaveI2C.write((uint8_t*)&gyro, sizeof(gyro));
-            break;
+        {
+            auto data = imu.GetGyro();
+
+            slaveI2C.write((uint8_t*)&data, sizeof(data));
+        }
+        break;
 
         case REG_MAG:
-            slaveI2C.write((uint8_t*)&mag, sizeof(mag));
-            break;
+        {
+            auto data = imu.GetMag();
+
+            slaveI2C.write((uint8_t*)&data, sizeof(data));
+        }
+        break;
 
         case REG_ACCEL_RAW:
         {
@@ -417,19 +448,19 @@ static void RequestI2C()
 
         case REG_EULER:
             slaveI2C.write((uint8_t*)&eulerAngles, sizeof(eulerAngles));
-            break;
+        break;
 
         case REG_HEADING:
             slaveI2C.write((uint8_t*)&heading, sizeof(heading));
-            break;
+        break;
 
-        //case CMD_ZERO:
-        //    velocity.x = velocity.y = velocity.z = 0.0;
-        //    break;
+        case REG_VELOCITY:
+            slaveI2C.write((uint8_t*)&velocity, sizeof(velocity));
+        break;
 
         default:
             slaveI2C.write((uint8_t)0x00);   // 0x00=Unrecognized command code
-            break;
+        break;
     }
 
     // Clears command buffer
@@ -502,6 +533,10 @@ void RequestSerial(Stream& dataStream)
                 RequestSerialHeading(dataStream);
                 break;
 
+            case CMD_VELOCITY:
+                RequestSerialVelocity(dataStream);
+                break;
+
             case CMD_ZERO:
                 velocity.x = velocity.y = velocity.z = 0.0;
                 break;
@@ -544,6 +579,7 @@ void ProcessContinuousModeCommand(Stream& dataStream, const char command, const 
         magContinuous = enableAll;
         eulerContinuous = enableAll;
         headingContinuous = enableAll;
+        velocityContinuous = enableAll;
         dataStream << PREFIX_RESPONSE << command << ' ' << enableAll << endl;
         break;
     }
@@ -578,58 +614,69 @@ void ProcessContinuousModeCommand(Stream& dataStream, const char command, const 
         headingContinuous = param2 == '1';
         dataStream << PREFIX_RESPONSE << command << param1 << ' ' << headingContinuous << endl;
         break;
+
+    case CMD_VELOCITY:
+        velocityContinuous = param2 == '1';
+        dataStream << PREFIX_RESPONSE << command << param1 << ' ' << velocityContinuous << endl;
+        break;
     }
 }
 
 
 void RequestSerialID(Stream& dataStream)
 {
-    dataStream << PREFIX_RESPONSE << CMD_ID << ' ' << _HEX(RAZOR_IMU_ID) << endl;
+    dataStream << PREFIX_RESPONSE << CMD_ID << ' ' << ' ' << _HEX(RAZOR_IMU_ID) << endl;
 }
 
 
 void RequestSerialIsReady(Stream& dataStream)
 {
-    dataStream << PREFIX_RESPONSE << CMD_IS_READY << ' ' << (ready ? '1' : '0') << endl;
+    dataStream << PREFIX_RESPONSE << CMD_IS_READY << ' ' << ' ' << (ready ? '1' : '0') << endl;
 }
 
 
 void RequestSerialAccel(Stream& dataStream, bool modeRaw)
 {
     if (modeRaw)
-        dataStream << PREFIX_RESPONSE << CMD_ACCEL << "r " << imu.GetAccelRaw().x << ' ' << imu.GetAccelRaw().y << ' ' << imu.GetAccelRaw().z << endl;
+        dataStream << PREFIX_RESPONSE << CMD_ACCEL_RAW << ' ' << millis() << ' ' << imu.GetAccelRaw().x << ' ' << imu.GetAccelRaw().y << ' ' << imu.GetAccelRaw().z << endl;
     else
-        dataStream << PREFIX_RESPONSE << CMD_ACCEL << ' ' << _FLOAT(acc.x, 2) << ' ' << _FLOAT(acc.y, 2) << ' ' << _FLOAT(acc.z, 2) << endl;
+        dataStream << PREFIX_RESPONSE << CMD_ACCEL << ' ' << millis() << ' ' << _FLOAT(imu.GetAccel().x, 4) << ' ' << _FLOAT(imu.GetAccel().y, 4) << ' ' << _FLOAT(imu.GetAccel().z, 4) << endl;
 }
 
 
 void RequestSerialGyro(Stream& dataStream, bool modeRaw)
 {
     if (modeRaw)
-        dataStream << PREFIX_RESPONSE << CMD_GYRO << "r " << imu.GetGyroRaw().x << ' ' << imu.GetGyroRaw().y << ' ' << imu.GetGyroRaw().z << endl;
+        dataStream << PREFIX_RESPONSE << CMD_GYRO_RAW << ' ' << millis() << ' ' << imu.GetGyroRaw().x << ' ' << imu.GetGyroRaw().y << ' ' << imu.GetGyroRaw().z << endl;
     else
-        dataStream << PREFIX_RESPONSE << CMD_GYRO << ' ' << _FLOAT(gyro.x, 2) << ' ' << _FLOAT(gyro.y, 2) << ' ' << _FLOAT(gyro.z, 2) << endl;
+        dataStream << PREFIX_RESPONSE << CMD_GYRO << ' ' << millis() << ' ' << _FLOAT(imu.GetGyro().x, 4) << ' ' << _FLOAT(imu.GetGyro().y, 4) << ' ' << _FLOAT(imu.GetGyro().z, 4) << endl;
 }
 
 
 void RequestSerialMag(Stream& dataStream, bool modeRaw)
 {
     if (modeRaw)
-        dataStream << PREFIX_RESPONSE << CMD_MAG << "r " << imu.GetMagRaw().x << ' ' << imu.GetMagRaw().y << ' ' << imu.GetMagRaw().z << endl;
+        dataStream << PREFIX_RESPONSE << CMD_MAG_RAW << ' ' << millis() << ' ' << imu.GetMagRaw().x << ' ' << imu.GetMagRaw().y << ' ' << imu.GetMagRaw().z << endl;
     else
-        dataStream << PREFIX_RESPONSE << CMD_MAG << ' ' << _FLOAT(mag.x, 2) << ' ' << _FLOAT(mag.y, 2) << ' ' << _FLOAT(mag.z, 2) << endl;
+        dataStream << PREFIX_RESPONSE << CMD_MAG << ' ' << millis() << ' ' << _FLOAT(imu.GetMag().x, 4) << ' ' << _FLOAT(imu.GetMag().y, 4) << ' ' << _FLOAT(imu.GetMag().z, 4) << endl;
 }
 
 
 void RequestSerialEuler(Stream& dataStream)
 {
-    dataStream << PREFIX_RESPONSE << CMD_EULER << ' ' << _FLOAT(eulerAngles.Yaw, 2) << ' ' << _FLOAT(eulerAngles.Pitch, 2) << ' ' << _FLOAT(eulerAngles.Roll, 2) << endl;
+    dataStream << PREFIX_RESPONSE << CMD_EULER << ' ' << millis() << ' ' << _FLOAT(eulerAngles.Yaw, 2) << ' ' << _FLOAT(eulerAngles.Pitch, 2) << ' ' << _FLOAT(eulerAngles.Roll, 2) << endl;
 }
 
 
 void RequestSerialHeading(Stream& dataStream)
 {
-    dataStream << PREFIX_RESPONSE << CMD_HEADING << ' ' << _FLOAT(heading, 2) << endl;
+    dataStream << PREFIX_RESPONSE << CMD_HEADING << ' ' << millis() << ' ' << _FLOAT(heading, 2) << endl;
+}
+
+
+void RequestSerialVelocity(Stream& dataStream)
+{
+    dataStream << PREFIX_RESPONSE << CMD_VELOCITY << ' ' << millis() << ',' << _FLOAT(velocity.x, 4) << ',' << _FLOAT(velocity.y, 4) << ',' << _FLOAT(velocity.z, 4) << endl;
 }
 
 

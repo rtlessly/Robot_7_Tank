@@ -32,6 +32,7 @@ AF_DCMotor2 rightMotor(motorController, 1);
 
 Servo panServo;                     // For panning the ultrasonic sensor left and right
 SonarSensor sonar(2, 4);            // Ultrasonic sensor on Arduino pins 2 and 4
+IRProximitySensor proxFront(12);    // Front IR Proximity sensor on pin 12 (for obstacle detection ahead)
 IRProximitySensor proxRight(5, 0);  // Right IR Proximity sensor on pin 5 (for obstacle detection on the right side)
 IRProximitySensor proxLeft(6, 0);   // Left IR Proximity sensor on pin 6 (for obstacle detection on the left side)
 IRProximitySensor proxStep(7);      // Step IR Proximity sensor on pin 7 (for step, i.e. drop-off, detection)
@@ -46,11 +47,12 @@ bool motorsEnabled = false;         // Indicates if the motors are enabled
 TaskScheduler scheduler;
 Task CheckRemoteTask(CheckRemoteCommand);
 Task CheckMagCalibrationTask(CheckMagCalibration);
- Task CheckStepSensorTask(CheckStepSensor);
+Task CheckStepSensorTask(CheckStepSensor);
+Task CheckFrontSensorsTask(CheckFrontSensor);
 Task CheckSideSensorsTask(CheckSideSensors);
 Task CheckSonarSensorTask(CheckSonarSensor);
 Task GoForwardTask([]() { GoForward(); return false; });
-Task AvoidObstacleDetectedBySonarTask(AvoidObstacleDetectedBySonar);
+Task ScanForNewDirectionTask(ScanForNewDirection);
 
 
 //******************************************************************************
@@ -72,12 +74,13 @@ void setup()
     panServo.attach(SERVO_PIN);
 
     // Center servo to point straight ahead
-    panServo.write(SERVO_BIAS);
+    PanSonar(0);
 
     // Setup tasks
     scheduler.Add(CheckRemoteTask);
     scheduler.Add(CheckMagCalibrationTask);
     scheduler.Add(CheckStepSensorTask);
+    scheduler.Add(CheckFrontSensorsTask);
     scheduler.Add(CheckSideSensorsTask);
     scheduler.Add(CheckSonarSensorTask);
     scheduler.Add(GoForwardTask);
@@ -163,6 +166,27 @@ bool CheckStepSensor()
 }
 
 
+bool CheckFrontSensor()
+{
+    // Check if sensor triggered
+    if (!proxFront.Read() || !motorsEnabled) return false;
+
+    // If front sensor is triggered then stop and back up
+    TRACE(Logger() << F("Front sensor triggered") << endl);
+    Stop();
+    GoBackward();
+
+    while (proxFront.Read());   // Backup until step sensor turns on again
+
+    GoBackward(500);            // Then back up a little more
+
+    // Add task to scan for a better direction to move
+    scheduler.InsertAfter(ScanForNewDirectionTask, CheckRemoteTask);
+
+    return true;
+}
+
+
 bool CheckSideSensors()
 {
     // Read both left and right sensors
@@ -218,7 +242,7 @@ bool CheckSonarSensor()
             if (--scanAngle < -10) scanDirection = 'R';
         }
 
-        panServo.write(SERVO_BIAS + scanAngle);
+        PanSonar(scanAngle);
 
         return false;
     }
@@ -227,7 +251,7 @@ bool CheckSonarSensor()
     // Stop when obstacle is detected
     TRACE(Logger() << F("Obstacle detected ahead by sonar") << endl);
     Stop();
-    panServo.write(SERVO_BIAS);
+    PanSonar(0);
     scanAngle = 0;
 
     // If obstacle is really close then back up a little first
@@ -237,13 +261,13 @@ bool CheckSonarSensor()
     }
 
     // Add task to scan for a better direction to move
-    scheduler.InsertAfter(AvoidObstacleDetectedBySonarTask, CheckRemoteTask);
+    scheduler.InsertAfter(ScanForNewDirectionTask, CheckRemoteTask);
 
     return true;
 }
 
 
-bool AvoidObstacleDetectedBySonar()
+bool ScanForNewDirection()
 {
     // Try to find a better direction to move
     auto results = ScanForBetterDirection();
@@ -280,7 +304,7 @@ bool AvoidObstacleDetectedBySonar()
     }
 
     // Remove task as it is no longer needed (for now)
-    scheduler.Remove(AvoidObstacleDetectedBySonarTask);
+    scheduler.Remove(ScanForNewDirectionTask);
 
     return true;
 }

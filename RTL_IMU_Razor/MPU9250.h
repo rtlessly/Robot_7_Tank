@@ -9,9 +9,6 @@
 // Subtract the bias values from the raw data reading for each axis
 // before doing anything else with the data values.
 // These were empirically determined using a separate calibration program, and are different for every sensor!
-//#define MAG_BIASX -42    // Default to 0 if unknown
-//#define MAG_BIASY 254    // Default to 0 if unknown
-//#define MAG_BIASZ 136    // Default to 0 if unknown
 #define MAG_BIASX -109.11  // Default to 0 if unknown
 #define MAG_BIASY  272.19  // Default to 0 if unknown
 #define MAG_BIASZ  136     // Default to 0 if unknown
@@ -42,23 +39,29 @@ class MPU9250
 
     public: void Calibrate(Print& stream = NullPrint);
 
+    public: void CalibrateFine(Print& stream);
+
     public: bool TestConnection(Print& stream=NullPrint);
 
     public: int8_t Update();
 
-    public: Vector3I GetAccelRaw() { return accRaw; };
+    public: float UpdateCompassHeading();
+
+    public: float GetHeading() { return heading; };
+
+    public: Vector3I GetAccelRaw() { return acclRaw; };
 
     public: Vector3I GetGyroRaw() { return gyroRaw; };
 
     public: Vector3I GetMagRaw() { return magRaw; };
 
-    public: Vector3F GetAccel();
+    public: Vector3F GetAccel() { return accl; };
 
-    public: Vector3F GetDynamicAccel();
+    public: Vector3F GetGyro() { return gyro; };
 
-    public: Vector3F GetGyro();
+    public: Vector3F GetMag() { return mag; };
 
-    public: Vector3F GetMag();
+    public: Vector3F GetSmoothedAccel() { return lastAccl; };
 
     public: int16_t ReadTempData();
 
@@ -68,9 +71,9 @@ class MPU9250
 
     public: float GetAres();
 
-    public: void GetAccelCalibration(float bias[3]);
+    public: Vector3F GetAccelCalibration() { return acclBias; };
 
-    public: void GetGyroCalibration(float bias[3]);
+    public: Vector3F GetGyroCalibration() { return gyroBias; };
 
     public: void GetMagCalibration(float bias[3], float sensitivity[3]);
 
@@ -80,12 +83,14 @@ class MPU9250
 
     public: void SetMagBiasZ(int16_t bias) { magBias[2] = bias; };
 
-    public: float UpdateCompassHeading(Vector3F mag, Vector3F acc, float dt);
-
-
     private: void initMPU9250();
 
     private: void initAK8963();
+
+
+    private: void SetAcclBias(Vector3F & bias);
+
+    private: void SetGyroBias(Vector3F & bias);
 
     private: static void writeByte(uint8_t address, uint8_t subAddress, uint8_t data);
 
@@ -94,22 +99,27 @@ class MPU9250
     private: static void readBytes(uint8_t address, uint8_t subAddress, uint8_t count, uint8_t * dest);
 
 
+    private: Vector3I acclRaw;                  // Raw accelerometer vector
+    private: Vector3I gyroRaw;                  // Raw gyro rates vector
+    private: Vector3I magRaw;                   // Raw magnetometer vector
+    private: Vector3F accl;                     // Scaled accelerometer vector (g)
+    private: Vector3F gyro;                     // Scaled gyro rates (radians/sec)
+    private: Vector3F mag;                      // Scaled magnetometer vector (milliGaus)
+    private: float heading;                     // Compass heading (degrees)
+
+    private: Vector3F lastMag{ 0.0, 0.0,0.0 };  // The smoothed magnetometer reading from the previous iteration
+    private: Vector3F lastAccl{ 0.0, 0.0,0.0 }; // The smoothed accelerometer reading from the previous iteration
+
     private: uint8_t Ascale;                    // acceleromter scale setting
     private: uint8_t Gscale;                    // gyroscope scale setting
     private: uint8_t Mscale;                    // magentometer scale setting - Choose either 14-bit or 16-bit resolution
     private: uint8_t Mmode;                     // magentometer scale MODE - 2=8 Hz, 6=100 Hz continuous magnetometer data read
-
-    private: float   accelBias[3] { 0, 0, 0 };  // Bias corrections for accelerometer
-    private: float   gyroBias[3] { 0, 0, 0 };   // Bias corrections for gyro
+    private: Vector3F acclBias;                 // Bias corrections for accelerometer
+    private: Vector3F accBiasFine;              // Fine bias corrections for accelerometer
+    private: Vector3F acclThreshold;            // Zero threshold for acceleration
+    private: Vector3F gyroBias;                 // Bias corrections for gyro
     private: float   magBias[3] { 0, 0, 0 };    // Magnetometer bias calibration (milliGauss)
     private: float   magSens[3] { 0, 0, 0 };    // Magnetometer sensitivity calibration (milliGauss)
-
-    private: Vector3I accRaw;
-    private: Vector3I gyroRaw;
-    private: Vector3I magRaw;
-
-    private: Vector3F lastMag;                  // The smoothed magnetometer reading from the previous iteration
-    private: Vector3F lastAcc;                  // The smoothed accelerometer reading from the previous iteration
 };
 
 #endif

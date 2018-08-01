@@ -33,6 +33,10 @@ MPU-9250 example code developed by Kris Winer ((c) Kris Winer, April 1, 2014).
 #include "MPU9250.h"
 
 
+float lowPass(float newValue, float oldValue, float alpha);
+Vector3F lowPass(Vector3F& newValue, Vector3F& oldValue, float alpha);
+
+
 MPU9250::MPU9250()
 {
     Ascale = AFS_2G;            // Specify acceleromter scale setting
@@ -193,9 +197,7 @@ void MPU9250::SelfTest(float* pResuts)
 // resulting offsets into accelerometer and gyro bias registers.
 void MPU9250::Calibrate(Print& stream)
 {
-    uint8_t data[12]; // data array to hold accelerometer and gyro x, y, z, data
-    int32_t gyro_bias[3] = { 0, 0, 0 };
-    int32_t accel_bias[3] = { 0, 0, 0 };
+    uint8_t data[12]; // data array for values to read/write to MPU9250
 
     // reset device
     writeByte(MPU9250_ADDRESS, PWR_MGMT_1, 0x80); // Write a one to bit 7 reset bit; toggle reset device
@@ -222,167 +224,137 @@ void MPU9250::Calibrate(Print& stream)
     writeByte(MPU9250_ADDRESS, GYRO_CONFIG, 0x00);  // Set gyro full-scale to 250 degrees per second, maximum sensitivity
     writeByte(MPU9250_ADDRESS, ACCEL_CONFIG, 0x00); // Set accelerometer full-scale to 2 g, maximum sensitivity
 
-    int32_t gyrosensitivity = 131;                  // = 131 LSB/degrees/sec
-    int32_t accelsensitivity = 16384;               // = 16384 LSB/g
-    int32_t count = 0;
+    const int32_t gyroSensitivity = 131;            // = 131 LSB/degrees/sec
+    const int32_t acclSensitivity = 16384;          // = 16384 LSB/g
+    const int countTrials = 5;
 
-    for (int iter = 0; iter < 25; iter++)
+    acclBias = 0;
+    gyroBias = 0;
+
+    // Perform 5 iterations of calibration to get 5 sampples for averaging.
+    for (auto trial = 0; trial < countTrials; trial++)
     {
-        // Configure FIFO to capture accelerometer and gyro data for bias calculation
-        writeByte(MPU9250_ADDRESS, USER_CTRL, 0x40);    // Enable FIFO
-        writeByte(MPU9250_ADDRESS, FIFO_EN, 0x78);      // Enable gyro and accelerometer sensors for FIFO  (max size 512 bytes in MPU-9150)
-        delay(40);                                      // accumulate 40 samples in 40 milliseconds = 480 bytes
+        Vector3F accl_bias;
+        Vector3F gyro_bias;
+        auto count = 0;
 
-        // At end of sample accumulation, turn off FIFO sensor read
-        writeByte(MPU9250_ADDRESS, FIFO_EN, 0x00);            // Disable gyro and accelerometer sensors for FIFO
-        readBytes(MPU9250_ADDRESS, FIFO_COUNTH, 2, &data[0]); // read FIFO sample count
-
-        int fifo_count = ((uint16_t)data[0] << 8) | data[1];
-        int packet_count = fifo_count / 12;// How many sets of full gyro and accelerometer data for averaging
-
-        for (int ii = 0; ii < packet_count; ii++)
+        // Take 1 second of accelerometer and gyroscope readings (25 x 40ms)
+        for (auto iter = 0; iter < 25; iter++)
         {
-            int16_t accel_temp[3] = { 0, 0, 0 };
-            int16_t gyro_temp[3] = { 0, 0, 0 };
+            digitalWrite(LED_BUILTIN, !digitalRead(LED_BUILTIN));
 
-            // read data for averaging
-            readBytes(MPU9250_ADDRESS, FIFO_R_W, 12, &data[0]);
+            // Configure FIFO to capture accelerometer and gyro data for bias calculation
+            writeByte(MPU9250_ADDRESS, USER_CTRL, 0x40);    // Enable FIFO
+            writeByte(MPU9250_ADDRESS, FIFO_EN, 0x78);      // Enable gyro and accelerometer sensors for FIFO (max size 512 bytes in MPU-9150)
+            delay(40);                                      // accumulate 40 samples in 40 milliseconds = 480 bytes
 
-            // Form signed 16-bit integer for each sample in FIFO
-            accel_temp[0] = (int16_t)(((int16_t)data[0] << 8) | data[1]);
-            accel_temp[1] = (int16_t)(((int16_t)data[2] << 8) | data[3]);
-            accel_temp[2] = (int16_t)(((int16_t)data[4] << 8) | data[5]);
-            gyro_temp[0] = (int16_t)(((int16_t)data[6] << 8) | data[7]);
-            gyro_temp[1] = (int16_t)(((int16_t)data[8] << 8) | data[9]);
-            gyro_temp[2] = (int16_t)(((int16_t)data[10] << 8) | data[11]);
+            // At end of sample accumulation, turn off FIFO sensor read
+            writeByte(MPU9250_ADDRESS, FIFO_EN, 0x00);            // Disable gyro and accelerometer sensors for FIFO
+            readBytes(MPU9250_ADDRESS, FIFO_COUNTH, 2, &data[0]); // read FIFO sample count
 
-            //stream << "Accel[x,y,z]=[" << accel_temp[0] << ", " << accel_temp[1] << ", " << accel_temp[2] << "]" << endl;
+            int fifo_count = ((uint16_t)data[0] << 8) | data[1];
+            int packet_count = fifo_count / 12;             // Number of complete sets of gyro and accelerometer data
 
-            // Sum individual signed 16-bit biases to get accumulated signed 32-bit biases
-            accel_bias[0] += (int32_t)accel_temp[0];
-            accel_bias[1] += (int32_t)accel_temp[1];
-            accel_bias[2] += (int32_t)accel_temp[2];
-            gyro_bias[0] += (int32_t)gyro_temp[0];
-            gyro_bias[1] += (int32_t)gyro_temp[1];
-            gyro_bias[2] += (int32_t)gyro_temp[2];
-            count++;
+            for (auto ii = 0; ii < packet_count; ii++)
+            {
+                // read data for averaging
+                readBytes(MPU9250_ADDRESS, FIFO_R_W, 12, &data[0]);
+
+                // Form signed 16-bit integer for each sample in FIFO and sum to get
+                // accumulated signed 32-bit biases
+                auto accl_x = (int16_t)(((int16_t)data[0] << 8) | data[1]);
+                auto accl_y = (int16_t)(((int16_t)data[2] << 8) | data[3]);
+                auto accl_z = (int16_t)(((int16_t)data[4] << 8) | data[5]);
+                auto gyro_x = (int16_t)(((int16_t)data[6] << 8) | data[7]);
+                auto gyro_y = (int16_t)(((int16_t)data[8] << 8) | data[9]);
+                auto gyro_z = (int16_t)(((int16_t)data[10] << 8) | data[11]);
+
+                accl_bias.x += accl_x;
+                accl_bias.y += accl_y;
+                accl_bias.z += accl_z;
+                gyro_bias.x += gyro_x;
+                gyro_bias.y += gyro_y;
+                gyro_bias.z += gyro_z;
+                count++;
+                TRACE(Logger() << count << ". accel[x,y,z]=[" << accl_x << ", " << accl_y << ", " << accl_z << "]" << endl);
+                TRACE(Logger() << count << ". accl_bias[x,y,z]=[" << accl_bias.x << ", " << accl_bias.y << ", " << accl_bias.z << "]" << endl);
+            }
+        }
+
+        // Normalize sums to get average biases
+        accl_bias /= count;
+        gyro_bias /= count;
+
+        // Remove gravity from the z-axis accelerometer bias calculation
+        accl_bias.z += (accl_bias.z > 0) ? -acclSensitivity : acclSensitivity;
+
+        // Accumulate bias values for later averaging
+        acclBias += accl_bias;
+        gyroBias += gyro_bias;
+        stream << trial+1 << ". accl_bias[x,y,z]=[" << accl_bias.x << ", " << accl_bias.y << ", " << accl_bias.z << ']' << endl;
+        stream << trial+1 << ". gyro_bias[x,y,z]=[" << gyro_bias.x << ", " << gyro_bias.y << ", " << gyro_bias.z << ']' << endl;
+    }
+
+    acclBias /= countTrials;
+    gyroBias /= countTrials;
+    digitalWrite(LED_BUILTIN, LOW);
+    stream << "Calibrated accl bias[x,y,z]=[" << acclBias.x << ", " << acclBias.y << ", " << acclBias.z << "]" << endl;
+    stream << "Calibrated gyro bias[x,y,z]=[" << gyroBias.x << ", " << gyroBias.y << ", " << gyroBias.z << "]" << endl;
+
+    SetAcclBias(acclBias);
+    SetGyroBias(gyroBias);
+}
+
+
+void MPU9250::CalibrateFine(Print& stream)
+{
+    initMPU9250();
+
+    Vector3F acclMax;
+    Vector3F acclMin;
+    Vector3F acclSum;
+    auto n = 0L;
+    auto t0 = millis();
+    auto t1 = t0;
+    auto endTime = t0 + 5000UL;
+
+    accBiasFine = 0.0;
+    acclThreshold = 0.0;
+
+    while ((t1 = millis()) < endTime)
+    {
+        if ((Update() & 0x01) == 0) continue;
+
+        auto a = GetAccel();
+
+        a.z -= 1.0;         // Subtract gravity acceleration on z-axis
+        acclSum += a;
+        t0 = t1;
+
+        if (++n == 1)       // On first pass initialize the min/max values
+        {
+            acclMax = a;
+            acclMin = a;
+        }
+        else
+        {
+            if (a.x > acclMax.x) acclMax.x = a.x; // (acclMax.x + a.x) / 2;
+            if (a.y > acclMax.y) acclMax.y = a.y; // (acclMax.x + a.x) / 2;
+            if (a.z > acclMax.z) acclMax.z = a.z; // (acclMax.x + a.x) / 2;
+            if (a.x < acclMin.x) acclMin.x = a.x; // (acclMax.x + a.x) / 2;
+            if (a.y < acclMin.y) acclMin.y = a.y; // (acclMax.x + a.x) / 2;
+            if (a.z < acclMin.z) acclMin.z = a.z; // (acclMax.x + a.x) / 2;
         }
     }
 
-    // Normalize sums to get average count biases
-    accel_bias[0] /= count;
-    accel_bias[1] /= count;
-    accel_bias[2] /= count;
-    gyro_bias[0] /= count;
-    gyro_bias[1] /= count;
-    gyro_bias[2] /= count;
+    accBiasFine = acclSum / n;
+    acclThreshold.x = ((fabs(acclMax.x) + fabs(acclMin.x)) * 0.5) - accBiasFine.x;
+    acclThreshold.y = ((fabs(acclMax.y) + fabs(acclMin.y)) * 0.5) - accBiasFine.y;
+    acclThreshold.z = ((fabs(acclMax.z) + fabs(acclMin.z)) * 0.5) - accBiasFine.z;
 
-    // Remove gravity from the z-axis accelerometer bias calculation
-    if (accel_bias[2] > 0L)
-    {
-        accel_bias[2] -= accelsensitivity;
-    }
-    else
-    {
-        accel_bias[2] += accelsensitivity;
-    }
-
-    // Construct the gyro biases for push to the hardware gyro bias registers, which are reset to zero upon device startup
-    data[0] = (-gyro_bias[0] / 4 >> 8) & 0xFF;  // Divide by 4 to get 32.9 LSB per deg/s to conform to expected bias input format
-    data[1] = (-gyro_bias[0] / 4) & 0xFF;       // Biases are additive, so change sign on calculated average gyro biases
-    data[2] = (-gyro_bias[1] / 4 >> 8) & 0xFF;
-    data[3] = (-gyro_bias[1] / 4) & 0xFF;
-    data[4] = (-gyro_bias[2] / 4 >> 8) & 0xFF;
-    data[5] = (-gyro_bias[2] / 4) & 0xFF;
-
-    // Push gyro biases to hardware registers
-    writeByte(MPU9250_ADDRESS, XG_OFFSET_H, data[0]);
-    writeByte(MPU9250_ADDRESS, XG_OFFSET_L, data[1]);
-    writeByte(MPU9250_ADDRESS, YG_OFFSET_H, data[2]);
-    writeByte(MPU9250_ADDRESS, YG_OFFSET_L, data[3]);
-    writeByte(MPU9250_ADDRESS, ZG_OFFSET_H, data[4]);
-    writeByte(MPU9250_ADDRESS, ZG_OFFSET_L, data[5]);
-
-    // Construct the accelerometer biases for push to the hardware accelerometer bias registers. These registers contain
-    // factory trim values which must be added to the calculated accelerometer biases; on boot up these registers will hold
-    // non-zero values. In addition, bit 0 of the lower byte must be preserved since it is used for temperature
-    // compensation calculations. Accelerometer bias registers expect bias input as 2048 LSB per g, so that
-    // the accelerometer biases calculated above must be divided by 8.
-    
-    int16_t accel_bias_reg[3] = { 0, 0, 0 }; // A place to hold the factory accelerometer trim biases
-    int16_t mask_bit[3] = { 0, 0, 0 }; // Array to hold mask bit for each accelerometer bias axis
-
-    readBytes(MPU9250_ADDRESS, XA_OFFSET_H, 2, &data[0]); // Read factory accelerometer trim values
-    accel_bias_reg[0] = (int32_t)(((int16_t)data[0] << 8) | data[1]);
-    mask_bit[0] = accel_bias_reg[0] & 0x0001;
-    
-    readBytes(MPU9250_ADDRESS, YA_OFFSET_H, 2, &data[0]);
-    accel_bias_reg[1] = (int32_t)(((int16_t)data[0] << 8) | data[1]);
-    mask_bit[1] = accel_bias_reg[1] & 0x0001;
-    
-    readBytes(MPU9250_ADDRESS, ZA_OFFSET_H, 2, &data[0]);
-    accel_bias_reg[2] = (int32_t)(((int16_t)data[0] << 8) | data[1]);
-    mask_bit[2] = accel_bias_reg[2] & 0x0001;
-
-    stream << "Accel_bias_reg[x,y,z]=[" << accel_bias_reg[0] << ", " << accel_bias_reg[1] << ", " << accel_bias_reg[2] << "]" << endl;
-    stream << "Accel_bias_reg[x,y,z]=[" << _HEX(accel_bias_reg[0]) << ", " << _HEX(accel_bias_reg[1]) << ", " << _HEX(accel_bias_reg[2]) << "]" << endl;
-
-    // Shift out temperature compensation bit to get actual value
-    accel_bias_reg[0] >>= 1;
-    accel_bias_reg[1] >>= 1;
-    accel_bias_reg[2] >>= 1;
-
-    stream << "Accel_bias_reg[x,y,z]=[" << accel_bias_reg[0] << ", " << accel_bias_reg[1] << ", " << accel_bias_reg[2] << "]" << endl;
-
-    // Construct total accelerometer bias, including calculated average accelerometer bias from above
-    // Subtract calculated averaged accelerometer bias scaled to 2048 LSB/g (16 g full scale)
-    accel_bias_reg[0] -= (int16_t)(accel_bias[0] / 8);
-    accel_bias_reg[1] -= (int16_t)(accel_bias[1] / 8);
-    accel_bias_reg[2] -= (int16_t)(accel_bias[2] / 8);
-
-    stream << "Accel_bias_reg[x,y,z]=[" << accel_bias_reg[0] << ", " << accel_bias_reg[1] << ", " << accel_bias_reg[2] << "]" << endl;
-
-    // Prepare to write back to accelerometer bias registers
-    // Reconstruct bias values to include temperature compensation bit
-    accel_bias_reg[0] = (accel_bias_reg[0] << 1) | mask_bit[0];
-    accel_bias_reg[1] = (accel_bias_reg[1] << 1) | mask_bit[1];
-    accel_bias_reg[2] = (accel_bias_reg[2] << 1) | mask_bit[2];
-
-    stream << "Accel_bias_reg[x,y,z]=[" << accel_bias_reg[0] << ", " << accel_bias_reg[1] << ", " << accel_bias_reg[2] << "]" << endl;
-    stream << "Accel_bias_reg[x,y,z]=[" << _HEX(accel_bias_reg[0]) << ", " << _HEX(accel_bias_reg[1]) << ", " << _HEX(accel_bias_reg[2]) << "]" << endl;
-
-    // Write the accel bias values
-    data[0] = (accel_bias_reg[0] >> 8) & 0xFF;
-    data[1] = (accel_bias_reg[0]) & 0xFF;
-    data[2] = (accel_bias_reg[1] >> 8) & 0xFF;
-    data[3] = (accel_bias_reg[1]) & 0xFF;
-    data[4] = (accel_bias_reg[2] >> 8) & 0xFF;
-    data[5] = (accel_bias_reg[2]) & 0xFF;
-
-    // Push accelerometer biases to hardware registers
-    writeByte(MPU9250_ADDRESS, XA_OFFSET_H, data[0]);
-    writeByte(MPU9250_ADDRESS, XA_OFFSET_L, data[1]);
-    writeByte(MPU9250_ADDRESS, YA_OFFSET_H, data[2]);
-    writeByte(MPU9250_ADDRESS, YA_OFFSET_L, data[3]);
-    writeByte(MPU9250_ADDRESS, ZA_OFFSET_H, data[4]);
-    writeByte(MPU9250_ADDRESS, ZA_OFFSET_L, data[5]);
-
-    // Output scaled gyro biases for display in the main program
-    gyroBias[0] = (float)gyro_bias[0] / (float)gyrosensitivity;
-    gyroBias[1] = (float)gyro_bias[1] / (float)gyrosensitivity;
-    gyroBias[2] = (float)gyro_bias[2] / (float)gyrosensitivity;
-
-    // Output scaled accelerometer biases for display in the main program
-    accelBias[0] = (float)accel_bias[0] / (float)accelsensitivity;
-    accelBias[1] = (float)accel_bias[1] / (float)accelsensitivity;
-    accelBias[2] = (float)accel_bias[2] / (float)accelsensitivity;
-
-    stream << "Gyro bias X: raw=" << gyro_bias[0] << ", scaled=" << _FLOAT(gyroBias[0], 3) << endl;
-    stream << "Gyro bias Y: raw=" << gyro_bias[1] << ", scaled=" << _FLOAT(gyroBias[1], 3) << endl;
-    stream << "Gyro bias Z: raw=" << gyro_bias[2] << ", scaled=" << _FLOAT(gyroBias[2], 3) << endl;
-    stream << "Accel bias X: raw=" << accel_bias[0] << ", scaled=" << _FLOAT(accelBias[0], 3) << endl;
-    stream << "Accel bias Y: raw=" << accel_bias[1] << ", scaled=" << _FLOAT(accelBias[1], 3) << endl;
-    stream << "Accel bias Z: raw=" << accel_bias[2] << ", scaled=" << _FLOAT(accelBias[2], 3) << endl;
+    stream << "Calibrated accl fine bias[x,y,z]=[" << _FLOAT(accBiasFine.x,6)   << ", " << _FLOAT(accBiasFine.y,6)   << ", "   << _FLOAT(accBiasFine.z, 6) << "]" << endl;
+    stream << "Calibrated accl threshold[x,y,z]=[" << _FLOAT(acclThreshold.x,6) << ", " << _FLOAT(acclThreshold.y,6) << ", " << _FLOAT(acclThreshold.z,6) << "]" << endl;
+    digitalWrite(LED_BUILTIN, LOW);
 }
 
 
@@ -398,9 +370,9 @@ int8_t MPU9250::Update()
 
         // Turn the MSB and LSB into a signed 16-bit value
         noInterrupts();
-        accRaw.x = ((int16_t)rawData[0] << 8) | rawData[1];
-        accRaw.y = ((int16_t)rawData[2] << 8) | rawData[3];
-        accRaw.z = ((int16_t)rawData[4] << 8) | rawData[5];
+        acclRaw.x = ((int16_t)rawData[0] << 8) | rawData[1];
+        acclRaw.y = ((int16_t)rawData[2] << 8) | rawData[3];
+        acclRaw.z = ((int16_t)rawData[4] << 8) | rawData[5];
         interrupts();
 
         readBytes(MPU9250_ADDRESS, GYRO_XOUT_H, 6, &rawData[0]);
@@ -427,53 +399,100 @@ int8_t MPU9250::Update()
         if (!(st2 & 0x08))
         {
             noInterrupts();
-            magRaw.x = ((int16_t)rawData[1] << 8) | rawData[0];  // Turn the MSB and LSB into a signed 16-bit value
-            magRaw.y = ((int16_t)rawData[3] << 8) | rawData[2];  // Data stored as little Endian
+            magRaw.x = ((int16_t)rawData[1] << 8) | rawData[0];     // Turn the MSB and LSB into a signed 16-bit value
+            magRaw.y = ((int16_t)rawData[3] << 8) | rawData[2];     // Data stored as little Endian
             magRaw.z = ((int16_t)rawData[5] << 8) | rawData[4];
             interrupts();
+
             result |= 0x02;
         }
+    }
+
+    if (result & 0x01)
+    {
+        auto aRes = GetAres();              // Accelerometer scaling factor
+        auto gRes = GetGres()*DEG_TO_RAD;   // Gyroscope scaling factor combined with degress-to-radians conversion
+        Vector3F a(acclRaw.x - acclBias.x, acclRaw.y - acclBias.y, acclRaw.z - acclBias.z);
+
+        a *= aRes;
+        a -= accBiasFine;
+        a = lowPass(a, accl, 0.1);
+
+        if (fabs(a.x) < acclThreshold.x) a.x = 0.0;
+        if (fabs(a.y) < acclThreshold.y) a.y = 0.0;
+        if (fabs(a.z) < acclThreshold.z) a.z = 0.0;
+
+        noInterrupts();
+        accl = a;
+        gyro.x = gyroRaw.x * gRes;
+        gyro.y = gyroRaw.y * gRes;
+        gyro.z = gyroRaw.z * gRes;
+        interrupts();
+
+        // Run the accelerometer vector through a low-pass filter to smooth output
+        // and minimize effect of noise
+        lastAccl = lowPass(accl, lastAccl, 0.1);
+    }
+
+    if (result & 0x02)
+    {
+        auto mRes = GetMres();  // Magnetometer scaling factor
+
+        noInterrupts();
+        mag.x = (magRaw.y - magBias[1]) * mRes * magSens[1];   // x value = mag y-axis value
+        mag.y = (magRaw.x - magBias[0]) * mRes * magSens[0];   // y value = mag x-axis value
+        mag.z = -(magRaw.z - magBias[2]) * mRes * magSens[2];  // z value = mag -z-axis value
+        interrupts();
+
+        // Run the magnetometer vector through a low-pass filter to smooth output
+        // and minimize effect of noise
+        lastMag = lowPass(mag, lastMag, 0.1);
+
+        // Update the compass heading
+        UpdateCompassHeading();
     }
 
     return result;
 }
 
 
-Vector3F MPU9250::GetAccel()
+//******************************************************************************
+// Update tilt-compensated Compass heading
+// Most accurate when device is under little or no acceleration
+//******************************************************************************
+float MPU9250::UpdateCompassHeading()
 {
-    auto aRes = GetAres();  // Acceleration scaling factor
-    
-    return Vector3F(accRaw.x * aRes, accRaw.y * aRes, accRaw.z * aRes); // - accelBias[2];
-}
+    // Used filtered magnetometer and accelerometer readings
+    auto bp = lastMag;
+    auto gp = lastAccl;
 
+    // Calculate roll angle
+    auto roll = atan2(gp.y, gp.z);          // Eq 13
+    auto sr = sin(roll);
+    auto cr = cos(roll);
 
-Vector3F MPU9250::GetDynamicAccel()
-{
-    return  Vector3F(dax, day, daz);
-}
+    // de-rotate by roll angle
+    auto by = bp.y*cr - bp.z*sr;            // Eq 19: y component
 
+    bp.z = bp.y*sr + bp.z*cr;               // Bpz = py*sin(roll)+Bpz*cos(roll)
+    gp.z = gp.y*sr + gp.z*cr;               // Eq 15 denominator
 
-Vector3F MPU9250::GetGyro()
-{
-    auto gRes = GetGres()*DEG_TO_RAD;  // Gyroscope scaling factor combined with degress-to-radians conversion
+                                            // calculate current pitch angle
+    auto pitch = atan(-gp.x / gp.z);        // Eq 15
+    auto sp = sin(pitch);
+    auto cp = cos(pitch);
 
-    return Vector3F(gyroRaw.x * gRes, gyroRaw.y * gRes, gyroRaw.z * gRes);
-}
+    // de-rotate by pitch angle 
+    auto bx = bp.x*cp + bp.z*sp;            // Eq 19: x component 
+    //auto bz = -bp.x*sp + bp.z*cp;           // Eq 19: z component - not really needed
 
+                                            // calculate current yaw angle
+    auto yaw = atan2(-by, bx);              // Eq 22
 
-Vector3F MPU9250::GetMag()
-{
-    auto mRes = GetMres();  // Magnetometer scaling factor
+                                            // Converts yaw angle to heading angle in range 0-360; where 0=North, 90=East, 180=South, 270=West
+    heading = fmod((TWO_PI - yaw)*RAD_TO_DEG + IMU_MAG_CORRECTION, 360);
 
-    // In the MPU-9250, the x and y axes of the magnetometer are aligned with the
-    // accelerometer and gyroscope y and x axes; and the magnetometer z-axis (+ down) 
-    // is opposite to z-axis (+ up) of accelerometer and gyroscope! To account for
-    // this orientation mismatch the magnetometer axes are realigned to match the
-    // accelerometer and gyroscope axes by swapping the the magnetometer X and Y axes
-    // and negating its z-axis.
-    return Vector3F((magRaw.y - magBias[1]) * mRes * magSens[1],      // x value = mag y-axis value
-                    (magRaw.x - magBias[0]) * mRes * magSens[0],      // y value = mag x-axis value
-                    (magRaw.z - magBias[2]) * mRes * magSens[2]);     // z value = mag z-axis value
+    return heading;
 }
 
 
@@ -573,28 +592,6 @@ float MPU9250::GetAres()
 }
 
 
-void MPU9250::GetAccelCalibration(float bias[3])
-{
-    if (bias != NULL)
-    {
-        bias[0] = accelBias[0];
-        bias[1] = accelBias[1];
-        bias[2] = accelBias[2];
-    }
-}
-
-
-void MPU9250::GetGyroCalibration(float bias[3])
-{
-    if (bias != NULL)
-    {
-        bias[0] = gyroBias[0];
-        bias[1] = gyroBias[1];
-        bias[2] = gyroBias[2];
-    }
-}
-
-
 void MPU9250::GetMagCalibration(float bias[3], float sensitivity[3])
 {
     if (bias != NULL)
@@ -610,99 +607,6 @@ void MPU9250::GetMagCalibration(float bias[3], float sensitivity[3])
         sensitivity[1] = magSens[1];
         sensitivity[2] = magSens[2];
     }
-}
-
-
-//******************************************************************************
-/// time smoothing constant for low-pass filter
-/// 0 ≤ alpha ≤ 1 ; a smaller value basically means more smoothing
-/// @see http://en.wikipedia.org/wiki/Low-pass_filter#Discrete-time_realization
-/// @see http://en.wikipedia.org/wiki/Low-pass_filter#Algorithmic_implementation
-//******************************************************************************
-float lowPass(float newValue, float oldValue, float alpha)
-{
-    auto output = oldValue + alpha * (newValue - oldValue);
-
-    return output;
-}
-
-
-//******************************************************************************
-/// time smoothing constant for low-pass filter
-/// 0 ≤ alpha ≤ 1 ; a smaller value basically means more smoothing
-/// @see http://en.wikipedia.org/wiki/Low-pass_filter#Discrete-time_realization
-/// @see http://en.wikipedia.org/wiki/Low-pass_filter#Algorithmic_implementation
-//******************************************************************************
-Vector3F lowPass(Vector3F& newValue, Vector3F& oldValue, float alpha)
-{
-    auto output = Vector3F(oldValue);
-    
-    output.x += alpha * (newValue.x - oldValue.x);
-    output.y += alpha * (newValue.y - oldValue.y);
-    output.z += alpha * (newValue.z - oldValue.z);
-
-    return output;
-}
-
-
-//******************************************************************************
-// Update tilt-compensated Compass heading
-// Most accurate when device is under little or no acceleration
-//******************************************************************************
-float MPU9250::UpdateCompassHeading(Vector3F mag, Vector3F acc, float dt)
-{
-    // Compute the low-pass filter coefficient, alpha. The basic formula is:
-    // 
-    //          alpha = beta * 1/n
-    //
-    // Where: n = Sampling rate per second
-    //        beta = A constant that controls the overall behavior of the filter
-    //
-    // 1/n is the same as the sampling interval, dt, in seconds.
-    //
-    // Larger values of beta make the filter more responsive (i.e., the output
-    // changes faster) but reduces the filters effectiveness (i.e., the output
-    // has more noise in it), while smaller values do the opposite.
-    //
-    // If this method is called infrequently, dt could exceed 1 second, which may cause
-    // alpha to exceed 1. The same could also happen if beta is too large. However, 
-    // alpha should always be between 0 and 1. To ensure that, the min() function
-    // is used to keep alpha from ever being greater than 1 (when alpha=1 the 
-    // low-pass filter is effectively disabled and returns the input value unchanged).
-    auto beta = 2.0f;
-    auto alpha = min(1.0f, beta*dt);
-
-    // Run the magnetometer and accelerometer values through a low-pass filter to 
-    // smooth output and minimize effect of dynamic accelerations
-    // (also remember the smoothed values for the next iteration)
-    auto bp = lastMag = lowPass(mag, lastMag, alpha);
-    auto gp = lastAcc = lowPass(acc, lastAcc, alpha);
-
-    // Calculate roll angle
-    auto roll = atan2(gp.y, gp.z);          // Eq 13
-    auto sr = sin(roll);
-    auto cr = cos(roll);
-
-    // de-rotate by roll angle
-    auto by = bp.y*cr - bp.z*sr;            // Eq 19: y component
-
-    bp.z = bp.y*sr + bp.z*cr;               // Bpz = py*sin(roll)+Bpz*cos(roll)
-    gp.z = gp.y*sr + gp.z*cr;               // Eq 15 denominator
-
-    // calculate current pitch angle
-    auto pitch = atan(-gp.x / gp.z);        // Eq 15
-    auto sp = sin(pitch);
-    auto cp = cos(pitch);
-
-    // de-rotate by pitch angle 
-    auto bx = bp.x*cp + bp.z*sp;            // Eq 19: x component 
-    //auto bz = -bp.x*sp + bp.z*cp;           // Eq 19: z component - not really needed
-
-    // calculate current yaw angle
-    auto yaw = atan2(-by, bx);          // Eq 22
-
-    // Converts yaw angle to heading angle in range 0-360; where 0=North, 90=East, 180=South, 270=West
-    return fmod((TWO_PI-yaw)*RAD_TO_DEG + IMU_MAG_CORRECTION, 360);
 }
 
 
@@ -736,26 +640,26 @@ void MPU9250::initMPU9250()
     // Range selects FS_SEL and GFS_SEL are 0 - 3, so 2-bit values are left-shifted into positions 4:3
     uint8_t c = readByte(MPU9250_ADDRESS, GYRO_CONFIG); // get current GYRO_CONFIG register value
 
-    //c = c & ~0xE0; // Clear self-test bits [7:5]
-    c = c & ~0x03; // Clear Fchoice bits [1:0]
-    c = c & ~0x18; // Clear GFS bits [4:3]
-    c = c | Gscale << 3; // Set full scale range for the gyro
-    //c =| 0x00; // Set Fchoice for the gyro to 11 by writing its inverse to bits 1:0 of GYRO_CONFIG
+    //c = c & ~0xE0;          // Clear self-test bits [7:5]
+    c = c & ~0x03;          // Clear Fchoice bits [1:0]
+    c = c & ~0x18;          // Clear GFS bits [4:3]
+    c = c | Gscale << 3;    // Set full scale range for the gyro
+    //c =| 0x00;              // Set Fchoice for the gyro to 11 by writing its inverse to bits 1:0 of GYRO_CONFIG
     writeByte(MPU9250_ADDRESS, GYRO_CONFIG, c); // Write new GYRO_CONFIG value to register
 
     // Set accelerometer full-scale range configuration
     c = readByte(MPU9250_ADDRESS, ACCEL_CONFIG); // get current ACCEL_CONFIG register value
-    //c = c & ~0xE0; // Clear self-test bits [7:5]
-    c = c & ~0x18;  // Clear AFS bits [4:3]
-    c = c | Ascale << 3; // Set full scale range for the accelerometer
+    //c = c & ~0xE0;          // Clear self-test bits [7:5]
+    c = c & ~0x18;          // Clear AFS bits [4:3]
+    c = c | Ascale << 3;    // Set full scale range for the accelerometer
     writeByte(MPU9250_ADDRESS, ACCEL_CONFIG, c); // Write new ACCEL_CONFIG register value
 
     // Set accelerometer sample rate configuration
     // It is possible to get a 4 kHz sample rate from the accelerometer by choosing 1 for
     // accel_fchoice_b bit [3]; in this case the bandwidth is 1.13 kHz
     c = readByte(MPU9250_ADDRESS, ACCEL_CONFIG2); // get current ACCEL_CONFIG2 register value
-    c = c & ~0x0F; // Clear accel_fchoice_b (bit 3) and A_DLPFG (bits [2:0])
-    c = c | 0x03;  // Set accelerometer rate to 1 kHz and bandwidth to 41 Hz
+    c = c & ~0x0F;          // Clear accel_fchoice_b (bit 3) and A_DLPFG (bits [2:0])
+    c = c | 0x03;           // Set accelerometer rate to 1 kHz and bandwidth to 41 Hz
     writeByte(MPU9250_ADDRESS, ACCEL_CONFIG2, c); // Write new ACCEL_CONFIG2 register value
 
     // Configure Interrupts and Bypass Enable
@@ -798,6 +702,109 @@ void MPU9250::initAK8963()
 }
 
 
+void MPU9250::SetAcclBias(Vector3F& bias)
+{
+    uint8_t data[12];
+
+    // Construct the accelerometer biases for push to the hardware accelerometer 
+    // bias registers. These registers contain factory trim values which must be
+    // added to the calculated accelerometer biases; on boot up these registers
+    // will hold non-zero values. In addition, bit 0 of the lower byte must be
+    // preserved since it is used for temperature compensation calculations.
+    // Accelerometer bias registers expect bias input as 2048 LSB per g, so that
+    // the accelerometer biases calculated above must be divided by 8.
+    int16_t accel_bias_reg[3] = { 0, 0, 0 };    // A place to hold the factory accelerometer trim biases
+    int16_t mask_bit[3] = { 0, 0, 0 };          // Array to hold mask bit for each accelerometer bias axis
+
+    readBytes(MPU9250_ADDRESS, XA_OFFSET_H, 2, &data[0]); // Read factory accelerometer trim values
+    accel_bias_reg[0] = (int32_t)(((int16_t)data[0] << 8) | data[1]);
+    mask_bit[0] = accel_bias_reg[0] & 0x0001;
+
+    readBytes(MPU9250_ADDRESS, YA_OFFSET_H, 2, &data[0]);
+    accel_bias_reg[1] = (int32_t)(((int16_t)data[0] << 8) | data[1]);
+    mask_bit[1] = accel_bias_reg[1] & 0x0001;
+
+    readBytes(MPU9250_ADDRESS, ZA_OFFSET_H, 2, &data[0]);
+    accel_bias_reg[2] = (int32_t)(((int16_t)data[0] << 8) | data[1]);
+    mask_bit[2] = accel_bias_reg[2] & 0x0001;
+
+    //stream << "Accel_bias_reg[x,y,z]=[0x" << _HEX(accel_bias_reg[0]) << ", 0x" << _HEX(accel_bias_reg[1]) << ", 0x" << _HEX(accel_bias_reg[2]) << "]" << endl;
+
+    // Shift out temperature compensation bit to get actual value
+    accel_bias_reg[0] >>= 1;
+    accel_bias_reg[1] >>= 1;
+    accel_bias_reg[2] >>= 1;
+
+    //stream << "Accel_bias_reg[x,y,z]=[" << accel_bias_reg[0] << ", " << accel_bias_reg[1] << ", " << accel_bias_reg[2] << "]" << endl;
+
+    // Construct total accelerometer bias, including calculated average accelerometer
+    // bias from above. Subtract calculated averaged accelerometer bias scaled to
+    // 2048 LSB/g (16 g full scale).
+    accel_bias_reg[0] -= (int16_t)(bias.x + 0.5f) / 8;
+    accel_bias_reg[1] -= (int16_t)(bias.y + 0.5f) / 8;
+    accel_bias_reg[2] -= (int16_t)(bias.z + 0.5f) / 8;
+
+    //stream << "Accel_bias_reg[x,y,z]=[" << accel_bias_reg[0] << ", " << accel_bias_reg[1] << ", " << accel_bias_reg[2] << "]" << endl;
+
+    // Prepare to write back to accelerometer bias registers
+    // Reconstruct bias values to include temperature compensation bit
+    accel_bias_reg[0] = (accel_bias_reg[0] << 1) | mask_bit[0];
+    accel_bias_reg[1] = (accel_bias_reg[1] << 1) | mask_bit[1];
+    accel_bias_reg[2] = (accel_bias_reg[2] << 1) | mask_bit[2];
+
+    //stream << "Accel_bias_reg[x,y,z]=[0x" << _HEX(accel_bias_reg[0]) << ", 0x" << _HEX(accel_bias_reg[1]) << ", 0x" << _HEX(accel_bias_reg[2]) << "]" << endl;
+
+    // Write the accel bias values
+    data[0] = (accel_bias_reg[0] >> 8) & 0xFF;
+    data[1] = (accel_bias_reg[0]) & 0xFF;
+    data[2] = (accel_bias_reg[1] >> 8) & 0xFF;
+    data[3] = (accel_bias_reg[1]) & 0xFF;
+    data[4] = (accel_bias_reg[2] >> 8) & 0xFF;
+    data[5] = (accel_bias_reg[2]) & 0xFF;
+
+    // Push accelerometer biases to hardware registers.
+    // Do this despite the fact that it doesn't aapear to be working on the MPU-9250
+    // (subsequent acceleration readings still show significant bias offset).
+    // Are we handling the temperature correction bit properly?
+    //writeByte(MPU9250_ADDRESS, XA_OFFSET_H, data[0]);
+    //writeByte(MPU9250_ADDRESS, XA_OFFSET_L, data[1]);
+    //writeByte(MPU9250_ADDRESS, YA_OFFSET_H, data[2]);
+    //writeByte(MPU9250_ADDRESS, YA_OFFSET_L, data[3]);
+    //writeByte(MPU9250_ADDRESS, ZA_OFFSET_H, data[4]);
+    //writeByte(MPU9250_ADDRESS, ZA_OFFSET_L, data[5]);
+}
+
+
+void MPU9250::SetGyroBias(Vector3F& bias)
+{
+    // Construct the gyro biases for push to the hardware gyro bias registers, 
+    // which are reset to zero upon device startup. 
+    // Divide bias values by 4 to get 32.9 LSB per deg/s to conform to expected
+    // bias input format. Biases are added by MPU9250, so change sign on gyro
+    // biases. Round-up bias values and do all artimetic in floating-point to
+    // minimize rounding errors before converting to integer.
+    int16_t biasX = -(bias.x + 0.5) / 4;
+    int16_t biasY = -(bias.y + 0.5) / 4;
+    int16_t biasZ = -(bias.z + 0.5) / 4;
+    uint8_t data[12];
+
+    data[0] = (biasX  >> 8) & 0xFF;
+    data[1] = (biasX) & 0xFF;
+    data[2] = (biasY >> 8) & 0xFF;
+    data[3] = (biasY) & 0xFF;
+    data[4] = (biasZ >> 8) & 0xFF;
+    data[5] = (biasZ) & 0xFF;
+
+    // Push gyro biases to hardware registers
+    writeByte(MPU9250_ADDRESS, XG_OFFSET_H, data[0]);
+    writeByte(MPU9250_ADDRESS, XG_OFFSET_L, data[1]);
+    writeByte(MPU9250_ADDRESS, YG_OFFSET_H, data[2]);
+    writeByte(MPU9250_ADDRESS, YG_OFFSET_L, data[3]);
+    writeByte(MPU9250_ADDRESS, ZG_OFFSET_H, data[4]);
+    writeByte(MPU9250_ADDRESS, ZG_OFFSET_L, data[5]);
+}
+
+
 // Wire.h read and write protocols
 void MPU9250::writeByte(uint8_t address, uint8_t subAddress, uint8_t data)
 {
@@ -836,5 +843,37 @@ void MPU9250::readBytes(uint8_t address, uint8_t subAddress, uint8_t count, uint
     {
         dest[i++] = Wire.read();       // Put read results in the Rx buffer
     }
+}
+
+
+//******************************************************************************
+/// time smoothing constant for low-pass filter
+/// 0 ≤ alpha ≤ 1 ; a smaller value basically means more smoothing
+/// @see http://en.wikipedia.org/wiki/Low-pass_filter#Discrete-time_realization
+/// @see http://en.wikipedia.org/wiki/Low-pass_filter#Algorithmic_implementation
+//******************************************************************************
+float lowPass(float newValue, float oldValue, float alpha)
+{
+    auto output = oldValue + alpha * (newValue - oldValue);
+
+    return output;
+}
+
+
+//******************************************************************************
+/// time smoothing constant for low-pass filter
+/// 0 ≤ alpha ≤ 1 ; a smaller value basically means more smoothing
+/// @see http://en.wikipedia.org/wiki/Low-pass_filter#Discrete-time_realization
+/// @see http://en.wikipedia.org/wiki/Low-pass_filter#Algorithmic_implementation
+//******************************************************************************
+Vector3F lowPass(Vector3F& newValue, Vector3F& oldValue, float alpha)
+{
+    auto output = Vector3F(oldValue);
+
+    output.x += alpha * (newValue.x - oldValue.x);
+    output.y += alpha * (newValue.y - oldValue.y);
+    output.z += alpha * (newValue.z - oldValue.z);
+
+    return output;
 }
 
