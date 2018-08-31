@@ -192,7 +192,7 @@ void MPU9250::SelfTest(float* pResuts)
 }
 
 
-// Calibrates gyro and accelerometer after device initialization.
+// Calibrates gyro and accelerometer before device initialization.
 // This calculates the average of the at-rest readings and then loads the
 // resulting offsets into accelerometer and gyro bias registers.
 void MPU9250::Calibrate(Print& stream)
@@ -231,7 +231,7 @@ void MPU9250::Calibrate(Print& stream)
     acclBias = 0;
     gyroBias = 0;
 
-    // Perform 5 iterations of calibration to get 5 sampples for averaging.
+    // Perform 5 iterations of calibration to get 5 samples for averaging.
     for (auto trial = 0; trial < countTrials; trial++)
     {
         Vector3F accl_bias;
@@ -276,6 +276,7 @@ void MPU9250::Calibrate(Print& stream)
                 gyro_bias.y += gyro_y;
                 gyro_bias.z += gyro_z;
                 count++;
+
                 TRACE(Logger() << count << ". accel[x,y,z]=[" << accl_x << ", " << accl_y << ", " << accl_z << "]" << endl);
                 TRACE(Logger() << count << ". accl_bias[x,y,z]=[" << accl_bias.x << ", " << accl_bias.y << ", " << accl_bias.z << "]" << endl);
             }

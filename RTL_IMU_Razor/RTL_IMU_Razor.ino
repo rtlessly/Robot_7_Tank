@@ -216,6 +216,7 @@ void setup()
     }
 
     ConsoleStream << "Confirmed." << endl;
+    ConsoleStream << endl;
 
     // Results of gyro and accelerometer self test
     float selfTestResults[6];
@@ -223,7 +224,6 @@ void setup()
     float magSens[3];
 
     // Perform self-test, self-calibration, and initialization of MPU-9250
-    ConsoleStream << endl;
     ConsoleStream << "RTL_IMU_Razor: Performing MPU-9250 self test..." << endl;
     imu.SelfTest(selfTestResults);
 
@@ -234,19 +234,19 @@ void setup()
     ConsoleStream << "\tGyroscope X-axis trim within "     << _FLOAT(selfTestResults[3],1) << "% of factory value" << endl;
     ConsoleStream << "\tGyroscope Y-axis trim within "     << _FLOAT(selfTestResults[4],1) << "% of factory value" << endl;
     ConsoleStream << "\tGyroscope Z-axis trim within "     << _FLOAT(selfTestResults[5],1) << "% of factory value" << endl;
-
     ConsoleStream << endl;
+
     ConsoleStream << "RTL_IMU_Razor: Performing calibration..." << endl;
     imu.Calibrate(ConsoleStream);
-    imu.CalibrateFine(ConsoleStream);
+    //imu.CalibrateFine(ConsoleStream);
     imu.GetMagCalibration(magBias, magSens);
 
     ConsoleStream << "Magnetometer calibration values: " << endl;
     ConsoleStream << "\tX-Axis sensitivity adjustment value " << _FLOAT(magSens[0], 2) << endl;
     ConsoleStream << "\tY-Axis sensitivity adjustment value " << _FLOAT(magSens[1], 2) << endl;
     ConsoleStream << "\tZ-Axis sensitivity adjustment value " << _FLOAT(magSens[2], 2) << endl;
-
     ConsoleStream << endl;
+
     ConsoleStream << "RTL_IMU_Razor: Starting IMU..." << endl;
     imu.Begin(ConsoleStream);
 

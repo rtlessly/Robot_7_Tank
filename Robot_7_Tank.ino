@@ -36,10 +36,9 @@ IRProximitySensor proxFront(12);    // Front IR Proximity sensor on pin 12 (for 
 IRProximitySensor proxRight(5, 0);  // Right IR Proximity sensor on pin 5 (for obstacle detection on the right side)
 IRProximitySensor proxLeft(6, 0);   // Left IR Proximity sensor on pin 6 (for obstacle detection on the left side)
 IRProximitySensor proxStep(7);      // Step IR Proximity sensor on pin 7 (for step, i.e. drop-off, detection)
-IRSensor ir(3);                     // IR Remote Sensor on pin 3 (for receiving signals from IR remote)
 IMU imu;                            // Inertial Measurement Unit (IMU) module
 
-bool motorsEnabled = false;         // Indicates if the motors are enabled
+bool inhibitSensors = false;        // Indicates if sensors should be disabled
 
 //******************************************************************************
 // TaskScheduler and Tasks
@@ -51,8 +50,8 @@ Task CheckStepSensorTask(CheckStepSensor);
 Task CheckFrontSensorsTask(CheckFrontSensor);
 Task CheckSideSensorsTask(CheckSideSensors);
 Task CheckSonarSensorTask(CheckSonarSensor);
-Task GoForwardTask([]() { GoForward(); return false; });
 Task ScanForNewDirectionTask(ScanForNewDirection);
+//Task GoTask([]() { Go(); return false; });
 
 
 //******************************************************************************
@@ -60,9 +59,12 @@ Task ScanForNewDirectionTask(ScanForNewDirection);
 //******************************************************************************
 void setup()
 {
-    Serial.begin(57600);
+    Serial.begin(115200);
     Wire.begin();
     pinMode(LED_PIN, OUTPUT);
+
+    // Enable ports 0 & 1 on the I2C shield - 0=IR remote, 1=IMU
+    I2C_SendCommand(I2C_SHIELD_I2C_ADDRESS, I2C_SHIELD_PORT0 | I2C_SHIELD_PORT1);
 
     // Initialize AF Motor Shield
     motorController.Begin();
@@ -78,13 +80,15 @@ void setup()
 
     // Setup tasks
     scheduler.Add(CheckRemoteTask);
-    scheduler.Add(CheckMagCalibrationTask);
+    //scheduler.Add(CheckMagCalibrationTask);
     scheduler.Add(CheckStepSensorTask);
     scheduler.Add(CheckFrontSensorsTask);
     scheduler.Add(CheckSideSensorsTask);
     scheduler.Add(CheckSonarSensorTask);
-    scheduler.Add(GoForwardTask);
+    //scheduler.Add(GoTask);
 
+    Stop();   // Ensure the robot starts from the stopped state
+    
     // Blink LED to indicate ready
     BlinkLEDCount(5, 150, 250);
 
@@ -106,39 +110,41 @@ void loop()
 // Task methods
 //******************************************************************************
 
-#define REMOTE_DEBOUNCE_TIME 500
-
-// The timeout helps to eliminate rapid, repeated triggers (bounce) caused by pulsed signals from IR Remote
-static uint32_t remoteDebounceTimeout = 0;
-
 bool CheckRemoteCommand()
 {
-    auto now = millis();
+    static uint32_t lastCommandTime = 0;
+    static uint32_t lastCommandCode = IR_NONE;
 
-    // Check if the IR Remote Sensor detected a signal
-    if (!ir.Read() || (now < remoteDebounceTimeout))
+    uint32_t now = millis();
+    IRRemoteCommand command;
+    
+    I2C_Request(IR_REMOTE_I2C_ADDRESS, command);
+
+    if (command.Code != IR_NONE)
     {
-        if (now > (remoteDebounceTimeout - (REMOTE_DEBOUNCE_TIME/2))) digitalWrite(LED_PIN, LOW);
-
+        lastCommandCode = command.Code;
+        lastCommandTime = now;
+    }
+    else if (lastCommandCode != IR_NONE && (now - lastCommandTime) > 200)
+    {
+        command.Type = IRRemoteCommandType::End;
+        command.Code = lastCommandCode;
+        lastCommandCode = IR_NONE;
+    }
+    else
+    {
         return false;
     }
 
-    TRACE(Logger() << F("Recieved IR Remote signal") << endl);
-    digitalWrite(LED_PIN, HIGH);
-    Stop();     // If motors are running this ensures they are stopped before being disabled, otherwise it does nothing
-    motorsEnabled = !motorsEnabled;
-    remoteDebounceTimeout = millis() + REMOTE_DEBOUNCE_TIME;
-
-    return true;
+    return ProcessCommand(command);
 }
 
 
 bool CheckMagCalibration()
 {
-    if (!motorsEnabled) return false;   // Motors have to be enabled to perform mag calibration
+    if (!isMoving) return false;   // Have to start moving before performing mag calibration
 
     PerformMagCalibration();
-    motorsEnabled = false;
     scheduler.Remove(CheckMagCalibrationTask);
 
     return true;
@@ -150,7 +156,7 @@ bool CheckStepSensor()
     // Check if sensor triggered (triggered if sensor returns 0 (false))
     auto stepDetected = !proxStep.Read();
 
-    if (!stepDetected || !motorsEnabled) return false;
+    if (!isMoving || !stepDetected) return false;
 
     // If step sensor is triggered then stop and back up
     TRACE(Logger() << F("Step sensor triggered") << endl);
@@ -160,7 +166,8 @@ bool CheckStepSensor()
     while (!proxStep.Read());   // Backup until step sensor turns on again
 
     GoBackward(500);            // Then back up a little more
-    Spin180();                  // And then turn around
+    Spin180();                  // Turn around
+    GoForward();                // And start moving forward again
 
     return true;
 }
@@ -169,7 +176,7 @@ bool CheckStepSensor()
 bool CheckFrontSensor()
 {
     // Check if sensor triggered
-    if (!proxFront.Read() || !motorsEnabled) return false;
+    if (inhibitSensors || !isMoving || !proxFront.Read()) return false;
 
     // If front sensor is triggered then stop and back up
     TRACE(Logger() << F("Front sensor triggered") << endl);
@@ -178,6 +185,7 @@ bool CheckFrontSensor()
 
     while (proxFront.Read());   // Backup until step sensor turns on again
 
+    wdt_reset();
     GoBackward(500);            // Then back up a little more
 
     // Add task to scan for a better direction to move
@@ -189,27 +197,41 @@ bool CheckFrontSensor()
 
 bool CheckSideSensors()
 {
+    if (inhibitSensors || !isMoving) return false;
+
     // Read both left and right sensors
     auto left = proxLeft.Read();
     auto right = proxRight.Read();
 
-    // If both sensors triggered then we may be in a corner or tight space
-    if (left && right)
+    if (left && right)      // If both sensors triggered then we may be in a corner or tight space
     {
         TRACE(Logger() << F("Both left and right IR sensors triggered.") << endl);
         Stop();
-        GoBackward(500);    // Backup for 1/2 second
-        Spin180();          // Then turn around
+        GoBackward(500);            // Backup for 1/2 second
+        Spin180();                  // Then turn around
+        GoForward();
     }
     else if (left)          // If left sensor triggered then spin right to avoid obstacle
     {
         TRACE(Logger() << F("Left IR sensor triggered.") << endl);
-        Spin('R');
+        Spin('R');                  // Start a turn away from the obstacle
+
+        while (proxLeft.Read());    // Turn until sensor stops detecting
+        
+        wdt_reset();
+        delay(200);                 // Turn a little longer to be sure
+        Go();
     }
     else if (right)         // If right sensor triggered then spin left to avoid obstacle
     {
         TRACE(Logger() << F("Right IR sensor triggered.") << endl);
-        Spin('L');
+        Spin('L');                  // Start a turn away from the obstacle
+        
+        while (proxRight.Read());   // Turn until sensor stops detecting
+        
+        wdt_reset();
+        delay(200);                 // Turn a little longer to be sure
+        Go();
     }
     else                    // Neither sensor triggered
     {
@@ -220,42 +242,62 @@ bool CheckSideSensors()
 }
 
 
-static char   scanDirection = 'R';
-static int8_t scanAngle = 0;
+static char    scanDirection = 'R';
+static int8_t  scanAngle = 0;
+static int16_t t1PingCount = 0;
+static int16_t t2PingCount = 0;
+
 
 bool CheckSonarSensor()
 {
-    if (!motorsEnabled) return false;
+    if (inhibitSensors || !isMoving) return false;
 
     // Check for obstacle ahead
+    PanSonar(scanAngle);
+
     auto ping = sonar.MultiPing();
+        
+    // Pan the sonar back and forth +/-10 degrees.
+    if (scanDirection == 'R')
+    {
+        if (++scanAngle > 10) scanDirection = 'L';
+    }
+    else
+    {
+        if (--scanAngle < -10) scanDirection = 'R';
+    }
 
     if (ping > SONAR_THRESHOLD)
     {
-        // Pan the sonar back and forth +/-10 degrees.
-        if (scanDirection == 'R')
-        {
-            if (++scanAngle > 10) scanDirection = 'L';
-        }
-        else
-        {
-            if (--scanAngle < -10) scanDirection = 'R';
-        }
+        t2PingCount = 0;
 
-        PanSonar(scanAngle);
+        // Resume normal speed if we got 10 long pings in a row
+        if (goingSlow && t1PingCount++ > 10) GoForward();
 
         return false;
     }
 
     // An obstacle was detected closer than threshold distance
-    // Stop when obstacle is detected
     TRACE(Logger() << F("Obstacle detected ahead by sonar") << endl);
+    
+    // if obstacle is greater than minimum distance then just slow down
+    if (ping > SONAR_THRESHOLD2)
+    {
+        t1PingCount = 0;
+
+        // Slow down if we got 5 short pings in a row
+        if (!goingSlow && t2PingCount++ > 5) GoSlow();
+
+        return false;
+    }
+
+    // Stop when obstacle is closer than minimum distance
     Stop();
     PanSonar(0);
     scanAngle = 0;
 
     // If obstacle is really close then back up a little first
-    if (Ping() < SONAR_THRESHOLD / 2)
+    if (ping <= SONAR_THRESHOLD3)
     {
         GoBackward(500);    // Backup for 1/2 second
     }
@@ -278,13 +320,15 @@ bool ScanForNewDirection()
         TRACE(Logger() << F("Backing out of space.") << endl);
         GoBackward(500);                // Backup for 1/2 second more
         Spin180(results.BestDirection); // Then turn around
+        GoForward();
+        wdt_reset();
     }
     else
     {
         // Start a spin in the direction indicated by sonar
         Spin(results.BestDirection);
 
-        auto timeout = millis() + 4000;
+        auto timeout = millis() + 2000;
 
         // Keep turning until sonar no longer sees the obstacle (or timeout)
         while (Ping() < SONAR_THRESHOLD)
@@ -297,9 +341,9 @@ bool ScanForNewDirection()
 
         // The obstacle is no longer detected, but it still may not be completely
         // clear of the robot. So continue turning a little longer to hopefully 
-        // completely clear it. The time delay depends on the speed of the robot.
+        // completely clear it.
         delay(400);
-        Stop();
+        GoForward();
         wdt_reset();
     }
 
@@ -308,3 +352,88 @@ bool ScanForNewDirection()
 
     return true;
 }
+
+
+bool ProcessCommand(IRRemoteCommand& command)
+{
+    TRACE(Logger() << F("Recieved IR Remote command: ") << _HEX(command.Code) << F(", type=") << _HEX(command.Type) << endl);
+
+    auto didSomething = false;
+
+    switch (command.Code)
+    {
+      case IR_PLAY:         // Start / Stop
+          // Ignore repeat and end commands for PLAY button
+          if (command.Type == IRRemoteCommandType::Normal)
+          { 
+              if (isMoving) Stop(); else GoForward();
+
+              TRACE(Logger() << (isMoving ? F("Started") : F("Stopped"))  << endl);
+              didSomething = true;
+          }
+      break;
+      
+      case IR_PREV:         // Turn left
+          if (command.Type == IRRemoteCommandType::Normal)
+          {
+              TRACE(Logger() << F("Turning left") << endl);
+              inhibitSensors = true;
+              Spin('L');
+              didSomething = true;
+          }
+          else if (command.Type == IRRemoteCommandType::End)
+          {
+              TRACE(Logger() << F("Cancelling turn") << endl);
+              inhibitSensors = false;
+              if (isMoving) Go(); else Stop();
+          }
+      break;
+      
+      case IR_NEXT:         // Turn right
+          if (command.Type == IRRemoteCommandType::Normal)
+          {
+              TRACE(Logger() << F("Turning right") << endl);
+              inhibitSensors = true;
+              Spin('R');
+              didSomething = true;
+          }
+          else if (command.Type == IRRemoteCommandType::End)
+          {
+              TRACE(Logger() << F("Cancelling turn") << endl);
+              inhibitSensors = false;
+              if (isMoving) Go(); else Stop();
+          }
+      break;
+      
+      case IR_VOL_PLUS:     // TODO: Increase speed
+      break;
+      
+      case IR_VOL_MINUS:    // TODO: Reduce speed
+      break;
+      
+      case IR_VOL_EQ:       // TODO: Resume normal forward speed
+      break;
+      
+      case IR_CH:           // Backup
+          if (command.Type == IRRemoteCommandType::Normal)
+          {
+              TRACE(Logger() << F("Backing up") << endl);
+              inhibitSensors = true;
+              GoBackward();
+              didSomething = true;
+          }
+          else if(command.Type == IRRemoteCommandType::End)
+          {
+              TRACE(Logger() << F("Cancelling back up") << endl);
+              inhibitSensors = false;
+              Stop();
+          }
+          break;
+
+      default:
+      break;
+    }
+
+    return didSomething;
+}
+

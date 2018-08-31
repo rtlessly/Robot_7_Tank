@@ -15,43 +15,17 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <None Include="Robot_7_Tank.ino" />
+    <None Include="RTL_IR_RemoteDecoder.ino" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="__vm\.Robot_7_Tank.vsarduino.h">
+    <ClInclude Include="__vm\.RTL_IR_RemoteDecoder.vsarduino.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="RTL_IMU_Razor\RTL_IMU.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="IMU.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="Robot_7_Tank.h">
-      <Filter>Header Files</Filter>
-    </ClInclude>
-    <ClInclude Include="RTL_IR_RemoteDecoder\RTL_IR_RemoteDecoder.h">
+    <ClInclude Include="RTL_IR_RemoteDecoder.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="RTL_IR_CommandCodes.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-  </ItemGroup>
-  <ItemGroup>
-    <ClCompile Include="IMU.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="MagCalibration.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Utility.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Sonar.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
-    <ClCompile Include="Movement.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
   </ItemGroup>
 </Project>

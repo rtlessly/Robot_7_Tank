@@ -1,5 +1,5 @@
 
-#define DEBUG 0
+#define DEBUG 1
 
 #include <arduino.h>
 #include <Wire.h>
@@ -116,6 +116,7 @@ bool IMU::WaitForReady(uint32_t timeout)
     while (imuReady == 0 && millis() < timeout)
     {
         SendCommand(REG_IS_READY, &imuReady);
+        TRACE(Logger() << F("IMU ready=") << imuReady << endl);
     }
 
     return (imuReady != 0);

@@ -4,25 +4,59 @@
 #include "Robot_7_Tank.h"
 
 
+int currentSpeed = 0;
+bool isMoving = false;         // Indicates if the motors are enabled
+bool goingSlow = false;
+
+
 //******************************************************************************
 // Movement control methods.
 //******************************************************************************
 
+void Go()
+{
+    SetMotors(currentSpeed, currentSpeed);
+}
+
+
+void Go(int speed)
+{
+    if (speed != 0)
+    {
+        goingSlow = between(1, speed, SLOW_SPEED);
+        currentSpeed = constrain(speed, -MAX_SPEED, MAX_SPEED);
+        SetMotors(currentSpeed, currentSpeed);
+        isMoving = true;
+    }
+    else
+    {
+        Stop();
+    }
+}
+
+
 void Stop()
 {
     SetMotors(0, 0);
+    isMoving = false;
 }
 
 
 void GoForward()
 {
-    SetMotors(CRUISE_SPEED, CRUISE_SPEED);
+    Go(CRUISE_SPEED);
+}
+
+
+void GoSlow()
+{
+    Go(SLOW_SPEED);
 }
 
 
 void GoBackward()
 {
-    SetMotors(-CRUISE_SPEED, -CRUISE_SPEED);
+    Go(-CRUISE_SPEED);
 }
 
 
@@ -145,9 +179,9 @@ void Spin(int16_t angle)
     float targetAngle = abs(angle)*DEG_TO_RAD;  // Target angle
     auto currAngle = 0.0f;                      // How much we have turned so far
     auto t0 = micros();                         // Time of last measurement
-    auto w0 = imu.GetGyro().z;
+    auto w0 = imu.GetGyro().z;                  // Initial gyro reading
 
-    // Use absolute value of current angle since we are only measuring the magnitude 
+    // Use absolute value of current angle since we only need to measure the magnitude 
     // of the turn and not the direction
     for (auto t1 = t0; abs(currAngle) < targetAngle; t1 = micros())
     {
@@ -182,13 +216,13 @@ void Spin(int16_t angle)
 //******************************************************************************
 void SetMotors(int leftSpeed, int rightSpeed)
 {
-    if (!motorsEnabled) leftSpeed = rightSpeed = 0;
+    //if (!isMoving) leftSpeed = rightSpeed = 0;
 
     leftSpeed = constrain(leftSpeed, -MAX_SPEED, MAX_SPEED);
     rightSpeed = constrain(rightSpeed, -MAX_SPEED, MAX_SPEED);
 
     // If the motors don't rotate in the desired direction you can correct it
-    // by changing the positive/negative sign of the speed in these calls.
+    // by changing the sign of the speed in these calls.
     leftMotor.Run(leftSpeed);
     rightMotor.Run(rightSpeed);
 }
