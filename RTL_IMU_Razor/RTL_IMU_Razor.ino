@@ -61,10 +61,12 @@ master and slave at the same time, this firmware configures an alternate I2C por
 on the Razor's pin A3 (SDA) and A4 (SCL) using the SAMD21 SERCOM0 port to act as
 the slave I2C port (see explanation below).
 
- Note: The Razor runs on the 3.3v and is not 5v tolerant. To connect it to a 5v
- system such as an Arduino Uno, a bidirectional signal level converter should be
- used to connect the I2C and/or the hardware serial port of the two devices.
- -----------------------------------------------------------------------------*/
+Note: The Razor runs on the 3.3v and is not 5v tolerant. To connect it to a 5v
+system such as an Arduino Uno, a bidirectional signal level converter should be
+used to connect the I2C and/or the hardware serial port of the two devices.
+------------------------------------------------------------------------------*/
+#include<cstring>
+#include <Streaming.h>
 #include <Arduino.h>
 #include <wiring_private.h> // To get pinPeripheral() function
 #include <Wire.h>
@@ -72,6 +74,10 @@ the slave I2C port (see explanation below).
 #include <RTL_EventFramework.h>
 #include "RTL_IMU.h"
 #include "MPU9250.h"
+
+
+bool DEBUG_I2C = true;
+
 
 #define RAZOR_IMU_ADDRESS   ((byte)0x40)
 #define RAZOR_IMU_ID       ((byte)0x50)
@@ -101,11 +107,11 @@ void IndicateFailure();
 
 
 // Pin definitions
-int intPin =  4;                // Interrupt pin, 2 and 3 are the Arduino's ext int pins, SAMD uses pin 4
-int HW_LED_PIN = LED_BUILTIN;   // Set up pin 13 led for toggling
+const int irqPin =  4;          // Interrupt pin, 2 and 3 are the Arduino's ext int pins, SAMD uses pin 4
+const int ledPin = LED_BUILTIN; // Set up pin 13 led for toggling
 
 // Slave I2C connection on SERCOM0 (A3=SDA, A4=SCL)
-TwoWire  slaveI2C = TwoWire(&sercom0, A3, A4);
+TwoWire slaveI2C = TwoWire(&sercom0, A3, A4);
 
 // The all-important MPU-9250 IMU
 MPU9250 imu;
@@ -115,10 +121,6 @@ Vector3F acc0;                  // The accelerometer reading from the previous i
 Vector3F velocity;              // Integrated velocity vector (m/s)
 EulerAngles eulerAngles;        // Euler angles (yaw, pitch, roll)
 float heading;                  // Compass heading
-
-// Housekeeping variables
-bool ready = false;             // true=the AHRS is ready to work, false=still initializing
-uint32_t lastUpdateTime = 0;    // Time of previous iteration (for calculating integration interval, dt)
 
 // Indicates which values should be output in continuous mode
 bool modeContinuous = false;
@@ -134,6 +136,22 @@ bool accelRaw = false;
 bool gyroRaw = false;
 bool magRaw = false;
 
+// Buffer to hold incoming messages
+uint8_t messageBuffer[33];
+volatile uint8_t messageLength = 0;
+volatile bool messagePending = false;
+
+// Buffer to hold outgoing responses
+uint8_t responseBuffer[33];
+volatile uint8_t responseLength = 0;
+volatile bool responsePending = false;
+
+// Housekeeping variables
+bool     ready = false;         // true=the AHRS is ready to work, false=still initializing
+uint32_t lastUpdateTime = 0;    // Time of previous iteration (for calculating integration interval, dt)
+uint16_t frameCount;
+uint32_t frameStartTime;
+
 
 //******************************************************************************
 // IRQ handler for recieving a message on Sercom0
@@ -146,20 +164,23 @@ void SERCOM0_Handler()
 
 void setup()
 {
+    ready = false;
+
     // Start ConsoleStream first thing so we can see diagnostics
     ConsoleStream.begin(115200);
 
     // Wait for SerialUSB to initialize (max 1 second since startup)
     while (!ConsoleStream && millis() < 1000);
 
-    // Configure LED pin
-    pinMode(HW_LED_PIN, OUTPUT);
-    digitalWrite(HW_LED_PIN, LOW);
-
-    // Start I2C interface, aka Two-Wire Interface (TWI)
-    ConsoleStream << "RTL_IMU_Razor: begin I2C Master..." << endl;
+    // Start master I2C interface
+    Logger() << "RTL_IMU_Razor: begin I2C Master..." << endl;
     Wire.begin();
+    Wire.setTimeout(50);
     //TWBR = 12;  // Sets 400 kbit/sec I2C speed
+
+    // Configure LED pin
+    pinMode(ledPin, OUTPUT);
+    digitalWrite(ledPin, LOW);
 
     /*--------------------------------------------------------------------------
     Initiate I2C slave port on SERCOM0 
@@ -187,7 +208,7 @@ void setup()
     just as we are reporgramming SERCOM0 as a second I2C port, we could reprogram
     another SERCOM as an alternate serial port, if needed.
     --------------------------------------------------------------------------*/
-    ConsoleStream << "RTL_IMU_Razor: begin I2C Slave..." << endl;
+    Logger() << "RTL_IMU_Razor: begin I2C Slave..." << endl;
     slaveI2C.begin(RAZOR_IMU_ADDRESS);
 
     // Must reassign pins A3 & A4 to SERCOM functionality
@@ -200,23 +221,23 @@ void setup()
     slaveI2C.onRequest(RequestI2C);         // interrupt handler for data requests
 
     // Configure MPU-9250 interrupt pin, its set as active high, push-pull
-    ConsoleStream << "RTL_IMU_Razor: Configure pins..." << endl;
-    pinMode(intPin, INPUT);
-    digitalWrite(intPin, LOW);
+    Logger() << "RTL_IMU_Razor: Configure IRQ pin..." << endl;
+    pinMode(irqPin, INPUT);
+    digitalWrite(irqPin, LOW);
 
     // Verify connectivity with MPU-9250
-    ConsoleStream << "RTL_IMU_Razor: Test MPU-9250 connectivity... ";
+    Logger() << "RTL_IMU_Razor: Test MPU-9250 connectivity... ";
 
     if (!imu.TestConnection(ConsoleStream))
     {
-        ConsoleStream << "Unable to connect to MPU-9250, Aborting..." << endl;
+        Logger() << "Unable to connect to MPU-9250, Aborting..." << endl;
 
         // Loop forever if communication doesn't happen
         while (true) IndicateFailure();
     }
 
-    ConsoleStream << "Confirmed." << endl;
-    ConsoleStream << endl;
+    Logger() << "Confirmed." << endl 
+             << endl;
 
     // Results of gyro and accelerometer self test
     float selfTestResults[6];
@@ -224,162 +245,177 @@ void setup()
     float magSens[3];
 
     // Perform self-test, self-calibration, and initialization of MPU-9250
-    ConsoleStream << "RTL_IMU_Razor: Performing MPU-9250 self test..." << endl;
+    Logger() << "RTL_IMU_Razor: Performing MPU-9250 self test..." << endl;
     imu.SelfTest(selfTestResults);
 
-    ConsoleStream << "MPU-9250 self-test results:" << endl;
-    ConsoleStream << "\tAccelerometer X-axis trim within " << _FLOAT(selfTestResults[0],1) << "% of factory value" << endl;
-    ConsoleStream << "\tAccelerometer Y-axis trim within " << _FLOAT(selfTestResults[1],1) << "% of factory value" << endl;
-    ConsoleStream << "\tAccelerometer Z-axis trim within " << _FLOAT(selfTestResults[2],1) << "% of factory value" << endl;
-    ConsoleStream << "\tGyroscope X-axis trim within "     << _FLOAT(selfTestResults[3],1) << "% of factory value" << endl;
-    ConsoleStream << "\tGyroscope Y-axis trim within "     << _FLOAT(selfTestResults[4],1) << "% of factory value" << endl;
-    ConsoleStream << "\tGyroscope Z-axis trim within "     << _FLOAT(selfTestResults[5],1) << "% of factory value" << endl;
-    ConsoleStream << endl;
+    Logger() << "MPU-9250 self-test results:" << endl;
+    Logger() << "\tAccelerometer X-axis trim within " << _FLOAT(selfTestResults[0],1) << "% of factory value" << endl;
+    Logger() << "\tAccelerometer Y-axis trim within " << _FLOAT(selfTestResults[1],1) << "% of factory value" << endl;
+    Logger() << "\tAccelerometer Z-axis trim within " << _FLOAT(selfTestResults[2],1) << "% of factory value" << endl;
+    Logger() << "\tGyroscope X-axis trim within "     << _FLOAT(selfTestResults[3],1) << "% of factory value" << endl;
+    Logger() << "\tGyroscope Y-axis trim within "     << _FLOAT(selfTestResults[4],1) << "% of factory value" << endl;
+    Logger() << "\tGyroscope Z-axis trim within "     << _FLOAT(selfTestResults[5],1) << "% of factory value" << endl
+             << endl;
 
-    ConsoleStream << "RTL_IMU_Razor: Performing calibration..." << endl;
+    Logger() << "RTL_IMU_Razor: Performing calibration..." << endl;
     imu.Calibrate(ConsoleStream);
     //imu.CalibrateFine(ConsoleStream);
     imu.GetMagCalibration(magBias, magSens);
 
-    ConsoleStream << "Magnetometer calibration values: " << endl;
-    ConsoleStream << "\tX-Axis sensitivity adjustment value " << _FLOAT(magSens[0], 2) << endl;
-    ConsoleStream << "\tY-Axis sensitivity adjustment value " << _FLOAT(magSens[1], 2) << endl;
-    ConsoleStream << "\tZ-Axis sensitivity adjustment value " << _FLOAT(magSens[2], 2) << endl;
-    ConsoleStream << endl;
+    Logger() << "Magnetometer calibration values: " << endl;
+    Logger() << "\tX-Axis sensitivity adjustment value " << _FLOAT(magSens[0], 2) << endl;
+    Logger() << "\tY-Axis sensitivity adjustment value " << _FLOAT(magSens[1], 2) << endl;
+    Logger() << "\tZ-Axis sensitivity adjustment value " << _FLOAT(magSens[2], 2) << endl
+             << endl;
 
-    ConsoleStream << "RTL_IMU_Razor: Starting IMU..." << endl;
+    Logger() << "RTL_IMU_Razor: Starting IMU..." << endl;
     imu.Begin(ConsoleStream);
 
-    ConsoleStream << endl;
-    ConsoleStream << "MPU-9250 is online..." << endl;
+    Logger() << endl;
+    Logger() << "MPU-9250 is online..." << endl;
+
+    frameCount = 0;
+    frameStartTime = micros();
+
     ready = true;
 }
 
 
-auto frameRate = 0.0f;
-auto frameCount = 0;
-auto frameStartTime = micros();
-
-
 void loop()
 {
-    // Ask the IMU to update its state vectors
-    imu.Update();
+    const uint32_t updateInterval = 8000;   // update the IMU state vectors every 8 ms (125 times a sec)
 
-    // Get new scaled state vectors
-    auto accl = imu.GetAccel();
-    auto gyro = imu.GetGyro();
-    auto mag = imu.GetMag();
+    //// Check for and process incoming I2C commands
+    //if (commandReady) ProcessI2CMessage();
 
-    // Set time elapsed since last update
     auto now = micros();
-    auto deltaT = (now - lastUpdateTime) / 1000000.0f;
+    auto dt = now - lastUpdateTime;
 
-    //MadgwickQuaternionUpdate(accel.x, accel.y, accel.z, gyro.x*PI/180.0f, gyro.y*PI/180.0f, gyro.z*PI/180.0f, mag.y, mag.x, -mag.z, deltaT);
-    MahonyQuaternionUpdate(accl, gyro, mag, deltaT);
-
-    auto newEulerAngles = UpdateEulerAngles();
-    auto acc1 = accl;
-    auto dv = (acc1 + acc0) * (0.5f * ONE_G * deltaT);  // Integrate velocity delta-v
-
-    noInterrupts();
-    eulerAngles = newEulerAngles;
-    heading = imu.GetHeading();
-    velocity += dv;
-    interrupts();
-
-    acc0 = acc1;
-    lastUpdateTime = now;
-    frameCount++;
-
-    if ((now - frameStartTime) > 1000000ul)
+    if (dt >= updateInterval)
     {
-        frameRate = frameCount / ((now - frameStartTime) / 1000000.0);
-        //Logger() << "Frame rate=" << frameRate << endl;
-        frameCount = 0;
-        frameStartTime = now;
+        imu.Update();
+
+        // Get new scaled state vectors
+        auto accl = imu.GetAccel();
+        auto gyro = imu.GetGyro();
+        auto mag = imu.GetMag();
+        auto deltaT = dt / 1000000.0f;  // Time elapsed since last update
+
+        //MadgwickQuaternionUpdate(accel.x, accel.y, accel.z, gyro.x*PI/180.0f, gyro.y*PI/180.0f, gyro.z*PI/180.0f, mag.y, mag.x, -mag.z, deltaT);
+        MahonyQuaternionUpdate(accl, gyro, mag, deltaT);
+
+        auto newEulerAngles = UpdateEulerAngles();
+        auto acc1 = accl;
+        auto dv = (acc1 + acc0) * (0.5f * ONE_G) * deltaT;  // Integrate velocity delta-v
+
+        noInterrupts();
+        eulerAngles = newEulerAngles;
+        heading = imu.GetHeading();
+        velocity += dv;
+        interrupts();
+
+        acc0 = acc1;
+        lastUpdateTime = now;
+        frameCount++;
     }
-
-    // Check for and process incoming serial requests
-    if (DataStream.available())
+    // Don't allow other work if we are within 500us updating the IMU
+    else if (dt < (updateInterval - 500))
     {
-        ReceiveSerial(DataStream);
-        RequestSerial(DataStream);
-    }
+        // Check for and process incoming serial requests
+        if (DataStream.available())
+        {
+            ReceiveSerial(DataStream);
+            RequestSerial(DataStream);
+        }
 
-    if (modeContinuous)
-    {
-        if (accelContinuous) RequestSerialAccel(DataStream, accelRaw);
+        dt = now - frameStartTime;
 
-        if (gyroContinuous) RequestSerialGyro(DataStream, gyroRaw);
-        
-        if (magContinuous) RequestSerialMag(DataStream, magRaw);
+        if (dt > 2000000ul)
+        {
+            auto frameRate = frameCount * 1000000.0 / dt;
 
-        if (eulerContinuous) RequestSerialEuler(DataStream);
+            Logger() << F("Frame rate=") << frameRate << endl;
+            frameCount = 0;
+            frameStartTime = now;
+        }
 
-        if (headingContinuous) RequestSerialHeading(DataStream);
+        if (modeContinuous)
+        {
+            if (accelContinuous) RequestSerialAccel(DataStream, accelRaw);
 
-        if (velocityContinuous) RequestSerialVelocity(DataStream);
+            if (gyroContinuous) RequestSerialGyro(DataStream, gyroRaw);
 
-        // Toggle LED to indicate continuous mode active
-        digitalWrite(HW_LED_PIN, !digitalRead(HW_LED_PIN));
+            if (magContinuous) RequestSerialMag(DataStream, magRaw);
+
+            if (eulerContinuous) RequestSerialEuler(DataStream);
+
+            if (headingContinuous) RequestSerialHeading(DataStream);
+
+            if (velocityContinuous) RequestSerialVelocity(DataStream);
+
+            // Toggle LED to indicate continuous mode active
+            digitalWrite(ledPin, !digitalRead(ledPin));
+        }
     }
 }
 
 
-// Buffer to hold command messages
-uint8_t commandBuffer[33];
+//void DumpLastCommand()
+//{
+//    if (commandsToLog == 0) return;
+//
+//    uint8_t buffer[sizeof commandBuffer];
+//    auto count = 0;
+//
+//    ZeroMemory(buffer, sizeof buffer);
+//
+//    noInterrupts();
+//    CopyMemory(buffer, commandBuffer, sizeof commandLength);
+//    count = commandsToLog;
+//    commandsToLog = 0;
+//    interrupts();
+//
+//    if (count > 1) Logger() << F("Unable to log ") << (count-1) << F(" previous command(s).") << endl;
+//
+//    if (count > 0) Logger() << F("Last Command =") << ToHex(buffer, sizeof buffer) << endl;
+//}
+//
+//
+//void DumpLastResponse()
+//{
+//    if (responsesToLog == 0) return;
+//
+//    uint8_t buffer[sizeof responseBuffer];
+//    auto count = 0;
+//
+//    ZeroMemory(buffer, sizeof buffer);
+//
+//    noInterrupts();
+//    CopyMemory(buffer, responseBuffer, responseLength);
+//    count = responsesToLog;
+//    responsesToLog = 0;
+//    interrupts();
+//
+//    if (count > 1) Logger() << F("Unable to log ") << (count - 1) << F(" previous response(s).") << endl;
+//
+//    if (count > 0) Logger() << F("Last Response=") << ToHex(buffer, sizeof buffer) << endl;
+//}
 
 
 //****************************************************************************
 // Interrupt handler for recieving a message on slave I2C connection
 //****************************************************************************
-static void ReceiveI2C(int messageLength)
+static void ReceiveI2C(int dataLength)
 {
-    auto maxLength = min(sizeof(commandBuffer) - 1, messageLength);
-    auto bytesRead = 0;
-
-    while (bytesRead < maxLength) commandBuffer[bytesRead++] = slaveI2C.read();
-
-    commandBuffer[bytesRead] = 0;
-
-    switch (commandBuffer[0])
+    for (messageLength = 0; slaveI2C.available(); )
     {
-        case REG_MAGBIAS_X:
-        {
-            auto data = *(int16_t*)&commandBuffer[1];
+        uint8_t c = slaveI2C.read();
 
-            imu.SetMagBiasX(data);
-        }
-        break;
-
-        case REG_MAGBIAS_Y:
-        {
-            auto data = *(int16_t*)&commandBuffer[1];
-
-            imu.SetMagBiasY(data);
-        }
-        break;
-
-        case REG_MAGBIAS_Z:
-        {
-            auto data = *(int16_t*)&commandBuffer[1];
-
-            imu.SetMagBiasZ(data);
-        }
-        break;
-
-        case REG_CONTROL:
-        {
-            auto data = *(int16_t*)&commandBuffer[1];
-
-            if (data == CMD_ZERO)
-            {
-                velocity.x = velocity.y = velocity.z = 0.0;
-            }
-        }
-        break;
+        if (messageLength < sizeof(messageBuffer))  messageBuffer[messageLength++] = c;
     }
+    
+    responsePending = ProcessI2CMessage();
+    //messagePending = (messageLength > 0);
 }
 
 
@@ -388,83 +424,141 @@ static void ReceiveI2C(int messageLength)
 //****************************************************************************
 static void RequestI2C()
 {
-    switch (commandBuffer[0])
+    // Check for and process incoming I2C commands
+    if (responsePending)
+    {
+        slaveI2C.write(responseBuffer, responseLength);
+        responsePending = false;
+    }
+}
+
+
+bool ProcessI2CMessage()
+{
+    //uint8_t buffer[sizeof messageBuffer];
+    //uint8_t bufferLen;
+
+    ////noInterrupts();
+    //CopyMemory(buffer, messageBuffer, sizeof messageLength);
+    //bufferLen = messageLength;
+    //messagePending = false;
+    //responsePending = false;
+    ////interrupts();
+
+    responseLength = 0;
+
+    //if (DEBUG_I2C) Logger() << F("Message Received[") << messageLength << F("]: ") << ToHex(messageBuffer, messageLength) << endl;
+
+    switch (messageBuffer[0])
     {
         case REG_ID:
-            slaveI2C.write(RAZOR_IMU_ID);
+        {
+            responseBuffer[0] = RAZOR_IMU_ID;
+            responseLength = 1;
+        }
         break;
 
         case REG_IS_READY:
-            slaveI2C.write(ready ? 1 : 0);
+        {
+            responseBuffer[0] = (ready ? 1 : 0);
+            responseLength = 1;
+        }
         break;
 
         case REG_ACCEL:
         {
             auto data = imu.GetAccel();
-
-            slaveI2C.write((uint8_t*)&data, sizeof(data));
+            responseLength = sizeof data;
+            CopyMemory(responseBuffer, (uint8_t*)&data, responseLength);
         }
         break;
 
         case REG_GYRO:
         {
             auto data = imu.GetGyro();
-
-            slaveI2C.write((uint8_t*)&data, sizeof(data));
+            responseLength = sizeof data;
+            CopyMemory(responseBuffer, (uint8_t*)&data, responseLength);
         }
         break;
 
         case REG_MAG:
         {
             auto data = imu.GetMag();
-
-            slaveI2C.write((uint8_t*)&data, sizeof(data));
+            responseLength = sizeof data;
+            CopyMemory(responseBuffer, (uint8_t*)&data, responseLength);
         }
         break;
 
         case REG_ACCEL_RAW:
         {
             auto data = imu.GetAccelRaw();
-
-            slaveI2C.write((uint8_t*)&data, sizeof(data));
+            responseLength = sizeof data;
+            CopyMemory(responseBuffer, (uint8_t*)&data, responseLength);
         }
         break;
 
         case REG_GYRO_RAW:
         {
             auto data = imu.GetGyroRaw();
-
-            slaveI2C.write((uint8_t*)&data, sizeof(data));
+            responseLength = sizeof data;
+            CopyMemory(responseBuffer, (uint8_t*)&data, responseLength);
         }
         break;
 
         case REG_MAG_RAW:
         {
             auto data = imu.GetMagRaw();
-
-            slaveI2C.write((uint8_t*)&data, sizeof(data));
+            responseLength = sizeof data;
+            CopyMemory(responseBuffer, (uint8_t*)&data, responseLength);
         }
         break;
 
         case REG_EULER:
-            slaveI2C.write((uint8_t*)&eulerAngles, sizeof(eulerAngles));
+        {
+            responseLength = sizeof eulerAngles;
+            CopyMemory(responseBuffer, (uint8_t*)&eulerAngles, responseLength);
+        }
         break;
 
         case REG_HEADING:
-            slaveI2C.write((uint8_t*)&heading, sizeof(heading));
+        {
+            responseLength = sizeof heading;
+            CopyMemory(responseBuffer, (uint8_t*)&heading, responseLength);
+        }
         break;
 
         case REG_VELOCITY:
-            slaveI2C.write((uint8_t*)&velocity, sizeof(velocity));
+        {
+            responseLength = sizeof velocity;
+            CopyMemory(responseBuffer, (uint8_t*)&velocity, responseLength);
+        }
         break;
 
-        default:
-            slaveI2C.write((uint8_t)0x00);   // 0x00=Unrecognized command code
+        case REG_MAGBIAS_X:
+        {
+            auto data = *(int16_t*)&messageBuffer[1];
+            imu.SetMagBiasX(data);
+        }
+        break;
+
+        case REG_MAGBIAS_Y:
+        {
+            auto data = *(int16_t*)&messageBuffer[1];
+            imu.SetMagBiasY(data);
+        }
+        break;
+
+        case REG_MAGBIAS_Z:
+        {
+            auto data = *(int16_t*)&messageBuffer[1];
+            imu.SetMagBiasZ(data);
+        }
         break;
     }
 
-    // Clears command buffer
-    commandBuffer[0] = 0;
+    //if (DEBUG_I2C && responseLength > 0) Logger() << F("Response to send[") << responseLength << F("]: ") << ToHex(responseBuffer, responseLength) << endl;
+
+    return (responseLength > 0);
 }
 
 
@@ -475,9 +569,9 @@ void ReceiveSerial(Stream& dataStream)
 {
     if (!dataStream.available()) return;
 
-    auto bytesRead = dataStream.readBytesUntil('\n', commandBuffer, sizeof(commandBuffer)-1);
+    auto bytesRead = dataStream.readBytesUntil('\n', messageBuffer, sizeof(messageBuffer)-1);
 
-    commandBuffer[bytesRead] = 0;
+    messageBuffer[bytesRead] = 0;
 }
 
 
@@ -486,14 +580,14 @@ void ReceiveSerial(Stream& dataStream)
 //****************************************************************************
 void RequestSerial(Stream& dataStream)
 {
-    if (commandBuffer[0] == 0) return;
+    if (messageBuffer[0] == 0) return;
 
 
-    if (commandBuffer[0] == PREFIX_CMD)
+    if (messageBuffer[0] == PREFIX_CMD)
     {
-        auto command = (char)commandBuffer[1];
-        auto param1 = (char)commandBuffer[2];
-        auto param2 = (char)commandBuffer[3];
+        auto command = (char)messageBuffer[1];
+        auto param1 = (char)messageBuffer[2];
+        auto param2 = (char)messageBuffer[3];
 
         switch (command)
         {
@@ -545,6 +639,14 @@ void RequestSerial(Stream& dataStream)
                 ProcessContinuousModeCommand(dataStream, command, param1, param2);
                 break;
 
+            case CMD_RESET:
+                setup();
+                break;
+
+            case CMD_DEBUG_I2C:
+                DEBUG_I2C = (param1 == '1');
+                break;
+
             default:
                 dataStream << PREFIX_ERR << _HEX(ERR_CMD_UNRECOGNIZED) << endl;
                 break;
@@ -556,7 +658,7 @@ void RequestSerial(Stream& dataStream)
     }
 
     // Clears command buffer
-    commandBuffer[0] = 0;
+    messageBuffer[0] = 0;
 }
 
 
@@ -684,9 +786,9 @@ void BlinkLEDCount(uint16_t count, uint16_t onTime, uint16_t offTime)
 {
     for (int i = 0; i < count; i++)
     {
-      digitalWrite(HW_LED_PIN, HIGH);
+      digitalWrite(ledPin, HIGH);
       delay(onTime);
-      digitalWrite(HW_LED_PIN, LOW);
+      digitalWrite(ledPin, LOW);
       delay(offTime);
     }
 }

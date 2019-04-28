@@ -4,9 +4,11 @@
 #include <Arduino.h>
 #include <avr/wdt.h>
 #include <Servo.h>
-#include <Wire.h>
+//#include <Wire.h>
+#include <I2C.h>
 #include <RTL_Stdlib.h>
-#include <RTL_I2C.h>
+//#include <RTL_I2C.h>
+#include <RTL_Blinker.h>
 #include <RTL_TaskScheduler.h>
 #include <AF_MotorShield2.h>
 #include <AF_DCMotor2.h>
@@ -22,6 +24,19 @@
 #define I2C_SHIELD_PORT1       ((byte)0b00000010)
 #define I2C_SHIELD_PORT2       ((byte)0b00000100)
 #define I2C_SHIELD_PORT3       ((byte)0b00001000)
+
+
+//******************************************************************************
+// Constants
+//******************************************************************************
+const int LED_PIN = 13;             // Hardware LED pin
+const int SERVO_PIN = 9;            // Servo on Arduino pin 9
+const int MAX_SPEED = 255;          // Maximum motor speed
+const int CRUISE_SPEED = 180;       // Normal running speed
+const int SLOW_SPEED   = 100;       // Slower speed when approaching obstacle
+const int SONAR_THRESHOLD  = 60;    // First sonar threshold distance in centimeters
+const int SONAR_THRESHOLD2 = 30;    // Second sonar threshold distance in centimeters
+const int SONAR_THRESHOLD3 = 15;    // Third sonar threshold distance in centimeters
 
 
 //******************************************************************************
@@ -83,21 +98,10 @@ void PanSonar(int angle);
 
 void PerformMagCalibration();
 
+void BlinkLED(uint16_t onTime = 100, uint16_t offTime = 0);
 void BlinkLEDCount(uint16_t count, uint16_t onTime = 100, uint16_t offTime = 100);
 void IndicateFailure(const __FlashStringHelper* msg = nullptr);
-
-
-//******************************************************************************
-// Constants
-//******************************************************************************
-const int LED_PIN = 13;             // Hardware LED pin
-const int SERVO_PIN = 9;            // Servo on Arduino pin 9
-const int MAX_SPEED = 255;          // Maximum motor speed
-const int CRUISE_SPEED = 180;       // Normal running speed
-const int SLOW_SPEED   = 100;       // Slower speed when approaching obstacle
-const int SONAR_THRESHOLD  = 60;    // First sonar threshold distance in centimeters
-const int SONAR_THRESHOLD2 = 30;    // Second sonar threshold distance in centimeters
-const int SONAR_THRESHOLD3 = 15;    // Third sonar threshold distance in centimeters
+void IndicateFailure(int step, const __FlashStringHelper* msg, bool loopForever = false);
 
 
 //******************************************************************************
@@ -135,4 +139,3 @@ extern Task CheckSideSensorsTask;
 extern Task CheckSonarSensorTask;
 extern Task GoForwardTask;
 #endif
-

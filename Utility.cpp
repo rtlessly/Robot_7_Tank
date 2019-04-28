@@ -4,6 +4,16 @@
 #include "Robot_7_Tank.h"
 
 
+void BlinkLED(uint16_t onTime, uint16_t offTime)
+{
+    digitalWrite(LED_PIN, HIGH);
+    delay(onTime);
+    digitalWrite(LED_PIN, LOW);
+    
+    if (offTime > 0) delay(offTime);
+}
+
+
 void BlinkLEDCount(uint16_t count, uint16_t onTime, uint16_t offTime)
 {
     for (int i = 0; i < count; i++)
@@ -14,6 +24,20 @@ void BlinkLEDCount(uint16_t count, uint16_t onTime, uint16_t offTime)
         digitalWrite(LED_PIN, LOW);
         delay(offTime);
     }
+}
+
+
+void IndicateFailure(int step, const __FlashStringHelper* msg, bool loopForever)
+{
+    if (msg != nullptr) Logger() << msg << endl;
+
+    do
+    {
+        BlinkLED(1000, 500);
+        BlinkLEDCount(step, 50, 200);
+        delay(1000);
+    }
+    while (loopForever);
 }
 
 

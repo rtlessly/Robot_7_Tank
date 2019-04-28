@@ -33,7 +33,22 @@
     <ClInclude Include="RTL_IR_RemoteDecoder\RTL_IR_RemoteDecoder.h">
       <Filter>Header Files</Filter>
     </ClInclude>
-    <ClInclude Include="RTL_IR_CommandCodes.h">
+    <ClInclude Include="RTL_IR_RemoteDecoder.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RTL_IMU_Razor\MPU9250.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RTL_IMU_Razor\MPU9250RegisterMap.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RTL_IMU_Razor\quaternionFilters.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="RTL_IR_RemoteDecoder\RTL_IR_CommandCodes.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="..\libraries\RTL_Common\RTL_Debug.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

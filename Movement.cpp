@@ -1,5 +1,7 @@
 
-#define DEBUG 0
+#define DEBUG 1
+
+#define FULL_SPIN_TIME 3500L
 
 #include "Robot_7_Tank.h"
 
@@ -15,6 +17,7 @@ bool goingSlow = false;
 
 void Go()
 {
+    TRACE(Logger(F("Go")) << endl);
     SetMotors(currentSpeed, currentSpeed);
 }
 
@@ -23,6 +26,7 @@ void Go(int speed)
 {
     if (speed != 0)
     {
+        TRACE(Logger(F("Go")) << '(' << speed << ')' << endl);
         goingSlow = between(1, speed, SLOW_SPEED);
         currentSpeed = constrain(speed, -MAX_SPEED, MAX_SPEED);
         SetMotors(currentSpeed, currentSpeed);
@@ -37,6 +41,7 @@ void Go(int speed)
 
 void Stop()
 {
+    TRACE(Logger(F("Stop")) << endl);
     SetMotors(0, 0);
     isMoving = false;
 }
@@ -44,24 +49,28 @@ void Stop()
 
 void GoForward()
 {
+    TRACE(Logger(F("GoForward")) << endl);
     Go(CRUISE_SPEED);
 }
 
 
 void GoSlow()
 {
+    TRACE(Logger(F("GoSlow")) << endl);
     Go(SLOW_SPEED);
 }
 
 
 void GoBackward()
 {
+    TRACE(Logger(F("GoBackward")) << endl);
     Go(-CRUISE_SPEED);
 }
 
 
 void GoBackward(uint32_t duration)
 {
+    TRACE(Logger(F("GoBackward")) << '(' << duration << "ms)" << endl);
     auto timeout = millis() + duration;
 
     GoBackward();
@@ -74,6 +83,7 @@ void GoBackward(uint32_t duration)
 
 void GoBackward(uint32_t duration, bool(*predicate)())
 {
+    TRACE(Logger(F("GoBackward")) << '(' << duration << F("ms, predicate)") << endl);
     auto timeout = millis() + duration;
 
     GoBackward();
@@ -86,6 +96,8 @@ void GoBackward(uint32_t duration, bool(*predicate)())
 
 void Spin(char direction)
 {
+    TRACE(Logger(F("Spin")) << '(' << direction << ')' << endl);
+
     if (direction == 'R')      // Spin to the right
     {
         SetMotors(-CRUISE_SPEED, CRUISE_SPEED);
@@ -99,6 +111,7 @@ void Spin(char direction)
 
 void Spin(char direction, uint32_t duration)
 {
+    TRACE(Logger(F("Spin")) << '(' << direction << ',' << duration << "ms)" << endl);
     auto timeout = millis() + duration;
 
     Spin(direction);
@@ -113,14 +126,13 @@ void Spin180(char direction)
 {
     TRACE(Logger(F("Spin180")) << '(' << direction << ')' << endl);
     Spin(direction == 'L' ? -180 : 180);
-    TRACE(Logger(F("Spin180")) << F("turn complete") << endl);
 }
 
 
 //******************************************************************************
 /// <summary>
 /// Performs a spin of a specific angle, measured in degrees. Negative angles spin
-/// left and positive angles spin right. 0 angles do nothing.
+/// right and positive angles spin left. 0 angles do nothing.
 /// </summary>
 /// <param>angle - The angle to spin, in degrees</param>
 /// <remarks>
@@ -168,13 +180,40 @@ void Spin(int16_t angle)
 
     if (angle == 0) return;
     
+    auto spinDirection = (angle < 0) ? 'L' : 'R';
+
+    // If the IMU was not found then approximate the turn angle using
+    // a timed spin. Note that all spins are executed at a constant
+    // speed (CRUISE_SPEED). The spin time basis, FULL_SPIN_TIME, is
+    // the time (in ms) it takes to spin a full 360 degrees at
+    // CRUISE_SPEED and needs to be calibrated.
+    if (!imu.IsActive())
+    {
+        Spin(spinDirection, (abs(angle)*FULL_SPIN_TIME) / 360L);
+    }
+    else
+    {
+        // Start spin in requested direction
+        Spin(spinDirection);
+
+        auto yaw = YawManouver(angle);
+        auto startTime = millis();      // Start time for timeout
+
+        // Keep spinning until we complete the yaw manouver (or a 10 second timeout occurs)
+        while (!yaw.Update() && (millis() - startTime) < 10000) wdt_reset();
+
+        Stop();
+    }
+    
+    return;
+
+
+
+
     imu.GetGyro();                              // Initial turn rate
 
     // Start spin in requested direction
-    if (angle < 0)
-        Spin('R');
-    else
-        Spin('L');
+    Spin(spinDirection);
 
     float targetAngle = abs(angle)*DEG_TO_RAD;  // Target angle
     auto currAngle = 0.0f;                      // How much we have turned so far
@@ -206,7 +245,6 @@ void Spin(int16_t angle)
     }
 
     Stop();
-    TRACE(Logger(F("Spin")) << F("Complete") << endl);
 }
 
 
