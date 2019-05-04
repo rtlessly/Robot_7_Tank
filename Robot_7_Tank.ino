@@ -18,6 +18,7 @@
  by R. Terry Lessly
  ******************************************************************************/
 
+#include <RTL_I2C.h>
 #include <RTL_Variant.h>
 #include <RTL_Stdlib.h>
 #include <RTL_Queue.h>
@@ -30,14 +31,6 @@
 
 #include "Robot_7_Tank.h"
 
-struct StatusReg
-{
-    bool INHIBIT_SENSORS : 1;
-    bool IMU_VALID : 1;
-    bool I2C_SHILED_VALID : 1;
-    bool MOTOR_CTLR_VALID : 1;
-    bool IR_REMOTE_VALID : 1;
-};
 
 //******************************************************************************
 // Global variables
@@ -85,12 +78,12 @@ void setup()
 
     Serial.begin(115200);
     pinMode(LED_PIN, OUTPUT);
-    //Wire.begin();
+
     I2c.begin();
     I2c.setSpeed(I2C::StdSpeed);
     I2c.pullup(I2C::DisablePullup);
 
-    I2c.scan();
+    //I2c.scan();
 
     //--------------------------------------------------------------------------
     // Determine if motor controller exists, configure it, and ensure motors are
@@ -227,8 +220,7 @@ bool CheckRemoteCommand()
     uint32_t now = millis();
     IRRemoteCommand response;
 
-    I2c.read<IRRemoteCommand>(IR_REMOTE_I2C_ADDRESS, response);
-    //I2C_Request(IR_REMOTE_I2C_ADDRESS, response);
+    I2c.read(IR_REMOTE_I2C_ADDRESS, response);
 
     if (response.Code != IR_NONE)
     {
@@ -374,12 +366,9 @@ bool CheckSonarSensor()
 {
     if (status.INHIBIT_SENSORS || !isMoving) return false;
 
-    // Check for obstacle ahead
+    // Pan the sonar back and forth +/-10 degrees.
     PanSonar(scanAngle);
 
-    auto ping = sonar.MultiPing();
-
-    // Pan the sonar back and forth +/-10 degrees.
     if (scanDirection == 'R')
     {
         if (++scanAngle > 10) scanDirection = 'L';
@@ -388,6 +377,9 @@ bool CheckSonarSensor()
     {
         if (--scanAngle < -10) scanDirection = 'R';
     }
+
+    // Check for obstacle ahead
+    auto ping = sonar.MultiPing();
 
     if (ping > SONAR_THRESHOLD)
     {

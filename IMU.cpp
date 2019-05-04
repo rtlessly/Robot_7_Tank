@@ -4,7 +4,7 @@
 #include <arduino.h>
 //#include <Wire.h>
 //#include <RTL_I2C.h>
-#include <I2C.h>
+#include <RTL_I2C.h>
 #include "IMU.h"
 
 extern IMU imu;
@@ -238,8 +238,8 @@ bool YawManouver::Update()
     auto t1 = micros();
     auto deltaT = UDIFF(t1, t0);
 
-    // Need at least 4ms between measurements to ensure we have an updated measurement
-    if (deltaT >= 4000)
+    // Need at least 10ms between measurements to ensure we have an updated measurement
+    if (deltaT >= 10000)
     {
         // Get new gyro measurement and compute time since last measurement (in seconds)
         auto w1 = GetYawRate();

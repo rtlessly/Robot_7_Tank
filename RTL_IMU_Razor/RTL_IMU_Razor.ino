@@ -74,9 +74,10 @@ used to connect the I2C and/or the hardware serial port of the two devices.
 #include <RTL_EventFramework.h>
 #include "RTL_IMU.h"
 #include "MPU9250.h"
+#include "SafePrint.h"
 
 
-bool DEBUG_I2C = true;
+bool DEBUG_I2C = false;
 
 
 #define RAZOR_IMU_ADDRESS   ((byte)0x40)
@@ -91,7 +92,10 @@ bool DEBUG_I2C = true;
 #endif
 
 
- // Forward function declarations
+const uint32_t UpdateInterval = 8000;   // update the IMU state vectors every 8 ms (125 times a sec)
+
+
+// Forward function declarations
 void ReceiveSerial(Stream& dataStream);
 void RequestSerialID(Stream& dataStream);
 void RequestSerialIsReady(Stream& dataStream);
@@ -108,7 +112,7 @@ void IndicateFailure();
 
 // Pin definitions
 const int irqPin =  4;          // Interrupt pin, 2 and 3 are the Arduino's ext int pins, SAMD uses pin 4
-const int ledPin = LED_BUILTIN; // Set up pin 13 led for toggling
+const int ledPin = LED_BUILTIN; // Set up pin 13 LED for toggling
 
 // Slave I2C connection on SERCOM0 (A3=SDA, A4=SCL)
 TwoWire slaveI2C = TwoWire(&sercom0, A3, A4);
@@ -151,6 +155,9 @@ bool     ready = false;         // true=the AHRS is ready to work, false=still i
 uint32_t lastUpdateTime = 0;    // Time of previous iteration (for calculating integration interval, dt)
 uint16_t frameCount;
 uint32_t frameStartTime;
+
+
+SafePrint irqLogger;
 
 
 //******************************************************************************
@@ -283,15 +290,10 @@ void setup()
 
 void loop()
 {
-    const uint32_t updateInterval = 8000;   // update the IMU state vectors every 8 ms (125 times a sec)
-
-    //// Check for and process incoming I2C commands
-    //if (commandReady) ProcessI2CMessage();
-
     auto now = micros();
     auto dt = now - lastUpdateTime;
 
-    if (dt >= updateInterval)
+    if (dt >= UpdateInterval)
     {
         imu.Update();
 
@@ -319,8 +321,10 @@ void loop()
         frameCount++;
     }
     // Don't allow other work if we are within 500us updating the IMU
-    else if (dt < (updateInterval - 500))
+    else if (dt < (UpdateInterval - 500))
     {
+        irqLogger.flush();
+
         // Check for and process incoming serial requests
         if (DataStream.available())
         {
@@ -414,8 +418,7 @@ static void ReceiveI2C(int dataLength)
         if (messageLength < sizeof(messageBuffer))  messageBuffer[messageLength++] = c;
     }
     
-    responsePending = ProcessI2CMessage();
-    //messagePending = (messageLength > 0);
+    responsePending = (messageLength > 0) ? ProcessI2CMessage() : false;
 }
 
 
@@ -435,19 +438,9 @@ static void RequestI2C()
 
 bool ProcessI2CMessage()
 {
-    //uint8_t buffer[sizeof messageBuffer];
-    //uint8_t bufferLen;
-
-    ////noInterrupts();
-    //CopyMemory(buffer, messageBuffer, sizeof messageLength);
-    //bufferLen = messageLength;
-    //messagePending = false;
-    //responsePending = false;
-    ////interrupts();
-
     responseLength = 0;
 
-    //if (DEBUG_I2C) Logger() << F("Message Received[") << messageLength << F("]: ") << ToHex(messageBuffer, messageLength) << endl;
+    if (DEBUG_I2C) irqLogger << F("Message Received[") << messageLength << F("]: ") << ToHex(messageBuffer, messageLength) << endl;
 
     switch (messageBuffer[0])
     {
@@ -556,7 +549,7 @@ bool ProcessI2CMessage()
         break;
     }
 
-    //if (DEBUG_I2C && responseLength > 0) Logger() << F("Response to send[") << responseLength << F("]: ") << ToHex(responseBuffer, responseLength) << endl;
+    if (DEBUG_I2C && responseLength > 0) irqLogger << F("Response to send[") << responseLength << F("]: ") << ToHex(responseBuffer, responseLength) << endl;
 
     return (responseLength > 0);
 }

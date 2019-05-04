@@ -4,10 +4,8 @@
 #include <Arduino.h>
 #include <avr/wdt.h>
 #include <Servo.h>
-//#include <Wire.h>
-#include <I2C.h>
+#include <RTL_I2C.h>
 #include <RTL_Stdlib.h>
-//#include <RTL_I2C.h>
 #include <RTL_Blinker.h>
 #include <RTL_TaskScheduler.h>
 #include <AF_MotorShield2.h>
@@ -103,6 +101,9 @@ void BlinkLEDCount(uint16_t count, uint16_t onTime = 100, uint16_t offTime = 100
 void IndicateFailure(const __FlashStringHelper* msg = nullptr);
 void IndicateFailure(int step, const __FlashStringHelper* msg, bool loopForever = false);
 
+//extern struct StatusReg; 
+
+//extern StatusReg status;
 
 //******************************************************************************
 // Motor control and related variables
@@ -138,4 +139,17 @@ extern Task CheckFrontSensorTask;
 extern Task CheckSideSensorsTask;
 extern Task CheckSonarSensorTask;
 extern Task GoForwardTask;
+
+
+struct StatusReg
+{
+    bool INHIBIT_SENSORS : 1;
+    bool IMU_VALID : 1;
+    bool I2C_SHILED_VALID : 1;
+    bool MOTOR_CTLR_VALID : 1;
+    bool IR_REMOTE_VALID : 1;
+};
+
+extern StatusReg status;
+
 #endif

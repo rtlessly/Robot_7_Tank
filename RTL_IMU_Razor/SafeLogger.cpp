@@ -1,0 +1,2 @@
+#include "SafeLogger.h"
+
